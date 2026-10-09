@@ -1,0 +1,25 @@
+name: mac-core
+
+on:
+  push:
+    paths: ["mac/**", ".github/workflows/mac-core.yml"]
+  pull_request:
+    paths: ["mac/**", ".github/workflows/mac-core.yml"]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-14, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: mac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mac
+      - run: cargo build --release
+      - run: cargo test --release

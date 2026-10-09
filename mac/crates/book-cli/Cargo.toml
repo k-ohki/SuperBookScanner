@@ -1,0 +1,17 @@
+[package]
+name = "book-cli"
+description = "Command line front end of book-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "superbook"
+path = "src/main.rs"
+
+[dependencies]
+book-core = { path = "../book-core" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+serde = "1"
+serde_json = "1"
