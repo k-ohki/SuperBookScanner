@@ -7,6 +7,7 @@ on:
     paths: ["mac/**", ".github/workflows/mac-core.yml"]
 
 jobs:
+  # 画像処理と CLI (Mac 以外でも動く)
   test:
     strategy:
       matrix:
@@ -18,8 +19,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: mac
-      - run: cargo build --release
-      - run: cargo test --release
+      - run: cargo fmt --all --check
+      - run: cargo build --release -p book-core -p book-cli
+      - run: cargo test --release -p book-core -p book-cli
+
+  # Tauri アプリ (画面を作ってから Rust 側をビルドする)
+  app:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: mac/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mac/app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mac
+      - run: npm ci
+      - run: npm run build
+      - run: cargo build --release -p superbook-app
