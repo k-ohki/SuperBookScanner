@@ -210,7 +210,72 @@ button.primary {
 .page .box {
   position: absolute;
   border: 1px dashed var(--accent);
+  cursor: move;
+  touch-action: none;
+}
+
+.page .box.manual {
+  border-style: solid;
+  border-width: 2px;
+}
+
+.page .box .handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.handle.nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.handle.ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+
+.page .box .reset {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.stage {
+  position: relative;
+  align-self: flex-start;
+  max-width: 100%;
+  touch-action: none;
+}
+
+.stage.splittable {
+  cursor: ew-resize;
+}
+
+.stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+}
+
+.split-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px solid var(--accent);
+  transform: translateX(-1px);
   pointer-events: none;
+}
+
+button.link {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 4px 0;
+}
+
+.thumb.skipped img {
+  opacity: 0.3;
 }
 
 .info {

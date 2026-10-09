@@ -3,6 +3,7 @@
 use anyhow::Result;
 use base64::Engine;
 use book_core::pipeline::{ConvertOptions, Progress};
+use book_core::project::{PageOverride, Project};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,18 +62,31 @@ pub struct FolderInfo {
     pub path: String,
     pub name: String,
     pub files: Vec<String>,
+    /// ページごとの手動調整 (files と同じ順)
+    pub overrides: Vec<PageOverride>,
 }
 
-/// フォルダ内の画像をページ順に列挙する。
+/// フォルダ内の画像をページ順に列挙し、保存してある手動調整を読む。
 #[tauri::command]
 fn open_folder(path: String) -> Result<FolderInfo, String> {
     let dir = PathBuf::from(&path);
     let files = book_core::input::list_images(&dir).map_err(|e| format!("{e:#}"))?;
+    let project = Project::load(&dir).map_err(|e| format!("{e:#}"))?;
     Ok(FolderInfo {
         name: dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-        path,
+        overrides: files.iter().map(|f| project.get(&dir, f)).collect(),
         files: files.iter().map(|f| f.display().to_string()).collect(),
+        path,
     })
+}
+
+/// 1 枚分の手動調整をフォルダの superbook.json に保存する (空なら消す)。
+#[tauri::command]
+fn save_override(folder: String, file: String, value: PageOverride) -> Result<(), String> {
+    let dir = PathBuf::from(&folder);
+    let mut project = Project::load(&dir).map_err(|e| format!("{e:#}"))?;
+    project.set(&dir, Path::new(&file), value);
+    project.save(&dir).map_err(|e| format!("{e:#}"))
 }
 
 /// 元画像のサムネイル (JPEG の data URL)。
@@ -93,6 +107,16 @@ async fn thumbnail(path: String, max_side: u32, rotate: u16) -> Result<String, S
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Preview {
+    /// 回転・平面化の後、分割の前の画像 (分割線を動かす画面用)
+    pub stage: String,
+    pub stage_width: u32,
+    pub stage_height: u32,
+    pub pages: Vec<PreviewPage>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreviewPage {
     /// 補正後の画像 (JPEG の data URL)
     pub image: String,
@@ -103,10 +127,14 @@ pub struct PreviewPage {
 
 /// 1 枚の入力画像を、書き出しと同じ設定で補正したプレビュー (見開きなら 2 ページ)。
 #[tauri::command]
-async fn preview(path: String, settings: Settings, max_side: u32) -> Result<Vec<PreviewPage>, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<PreviewPage>> {
+async fn preview(path: String, settings: Settings, value: PageOverride, max_side: u32) -> Result<Preview, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Preview> {
         let options = settings.to_options();
-        book_core::pipeline::process_image(Path::new(&path), &options)?
+        let result = book_core::pipeline::process_image_with(Path::new(&path), &options, &value)?;
+        let (stage_width, stage_height) = result.stage.dimensions();
+        let stage = data_url(&shrink(&result.stage, max_side))?;
+        let pages = result
+            .pages
             .into_iter()
             .map(|(img, report)| {
                 let (width, height) = img.dimensions();
@@ -117,7 +145,13 @@ async fn preview(path: String, settings: Settings, max_side: u32) -> Result<Vec<
                     report,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Preview {
+            stage,
+            stage_width,
+            stage_height,
+            pages,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -193,6 +227,7 @@ pub fn run() {
         .manage(ConvertState::default())
         .invoke_handler(tauri::generate_handler![
             open_folder,
+            save_override,
             thumbnail,
             preview,
             convert,

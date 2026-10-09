@@ -32,7 +32,21 @@ export const defaultSettings: Settings = {
   sharpenScale: 2,
 };
 
-export type FolderInfo = { path: string; name: string; files: string[] };
+export type SplitOverride = "none" | { at: number };
+
+export type RectF = { x: number; y: number; w: number; h: number };
+
+/// 1 枚の画像だけの手動調整 (Rust の project::PageOverride)。省略した項目は全体の設定・自動処理に従う
+export type PageOverride = {
+  skip?: boolean;
+  rotate?: 0 | 90 | 180 | 270 | null;
+  unwarp?: boolean | null;
+  dewarp?: boolean | null;
+  split?: SplitOverride | null;
+  content?: Record<string, RectF>;
+};
+
+export type FolderInfo = { path: string; name: string; files: string[]; overrides: PageOverride[] };
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -48,6 +62,8 @@ export type PageReport = {
 
 export type PreviewPage = { image: string; width: number; height: number; report: PageReport };
 
+export type Preview = { stage: string; stageWidth: number; stageHeight: number; pages: PreviewPage[] };
+
 export type Progress =
   | { kind: "PageProcessed"; done: number; total: number; file: string }
   | { kind: "PageSharpened"; done: number; total: number }
@@ -58,7 +74,23 @@ export const openFolder = (path: string) => invoke<FolderInfo>("open_folder", { 
 
 export const thumbnail = (path: string, maxSide: number, rotate: number) => invoke<string>("thumbnail", { path, maxSide, rotate });
 
-export const preview = (path: string, settings: Settings, maxSide: number) => invoke<PreviewPage[]>("preview", { path, settings, maxSide });
+export const preview = (path: string, settings: Settings, value: PageOverride, maxSide: number) => invoke<Preview>("preview", { path, settings, value, maxSide });
+
+export const saveOverride = (folder: string, file: string, value: PageOverride) => invoke<void>("save_override", { folder, file, value });
+
+/// 空の項目を落とす (すべて空なら {} になり、保存ファイルから消える)
+export const cleanOverride = (o: PageOverride): PageOverride => {
+  const r: PageOverride = {};
+  if (o.skip) r.skip = true;
+  if (o.rotate != null) r.rotate = o.rotate;
+  if (o.unwarp != null) r.unwarp = o.unwarp;
+  if (o.dewarp != null) r.dewarp = o.dewarp;
+  if (o.split != null) r.split = o.split;
+  if (o.content && Object.keys(o.content).length > 0) r.content = o.content;
+  return r;
+};
+
+export const isOverridden = (o: PageOverride | undefined) => !!o && Object.keys(cleanOverride(o)).length > 0;
 
 export const convert = (input: string, output: string, settings: Settings) => invoke<void>("convert", { input, output, settings });
 

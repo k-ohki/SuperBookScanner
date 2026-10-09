@@ -102,7 +102,12 @@ pub fn find_gutter(img: &RgbImage, options: &SplitOptions) -> Option<u32> {
 
 /// 見開きを左右 2 枚に分ける。分割しない場合は 1 枚のまま返す。
 pub fn split_spread(img: &RgbImage, options: &SplitOptions) -> (Vec<RgbImage>, SplitResult) {
-    match find_gutter(img, options) {
+    split_at(img, find_gutter(img, options))
+}
+
+/// 指定した x で左右に分ける (None や端なら分けない)。
+pub fn split_at(img: &RgbImage, x: Option<u32>) -> (Vec<RgbImage>, SplitResult) {
+    match x {
         Some(x) if x > 0 && x < img.width() => {
             let left = imageops::crop_imm(img, 0, 0, x, img.height()).to_image();
             let right = imageops::crop_imm(img, x, 0, img.width() - x, img.height()).to_image();

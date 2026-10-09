@@ -44,6 +44,7 @@ cargo build --release
 # 主なオプション
 #   --rotate 270          読み込み後に回す角度 (横向きに撮った写真など。時計回り)
 #   --no-unwarp           写真の平面化 (紙の範囲・台形・反り・背景) をしない (平らなスキャンなど)
+#   --no-project          アプリで保存したページごとの調整 (入力フォルダの superbook.json) を使わない
 #   --rtl                 右綴じ (縦書きの本)
 #   --sharpen             AI 鮮明化 (--sharpen-scale 2 で 600dpi 相当、--sharpen-model で モデル変更)
 #   --no-dewarp           歪み補正をしない (平らなスキャンなど)

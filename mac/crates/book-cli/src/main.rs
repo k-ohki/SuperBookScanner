@@ -24,6 +24,9 @@ enum Command {
         /// サブフォルダをまとめて変換する
         #[arg(short, long)]
         recursive: bool,
+        /// 入力フォルダの superbook.json (アプリで行ったページごとの調整) を使わない
+        #[arg(long)]
+        no_project: bool,
         /// 写真のページの平面化 (紙の範囲・台形・反り。UVDoc) をしない
         #[arg(long)]
         no_unwarp: bool,
@@ -103,6 +106,7 @@ fn main() -> Result<()> {
             input,
             output,
             recursive,
+            no_project,
             no_unwarp,
             unwarp_model,
             no_deskew,
@@ -126,6 +130,7 @@ fn main() -> Result<()> {
             opts.page_box = (((page_long_side as f64) * 2480.0 / 3508.0).round() as u32, page_long_side);
             opts.pdf.dpi = 300.0 * page_long_side as f64 / 3508.0;
             opts.rotate = rotate;
+            opts.use_project_file = !no_project;
             if no_unwarp {
                 opts.unwarp = None;
             } else if let Some(u) = opts.unwarp.as_mut() {

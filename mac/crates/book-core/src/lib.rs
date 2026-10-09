@@ -9,6 +9,7 @@ pub mod input;
 pub mod layout;
 pub mod pdf;
 pub mod pipeline;
+pub mod project;
 pub mod sharpen;
 pub mod split;
 pub mod unwarp;

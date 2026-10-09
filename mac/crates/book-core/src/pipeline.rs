@@ -16,6 +16,7 @@ use crate::illumination::{self, IlluminationOptions};
 use crate::input;
 use crate::layout::{self, LayoutOptions, Rect};
 use crate::pdf::{self, PdfOptions};
+use crate::project::{PageOverride, Project, SplitOverride};
 use crate::sharpen::{self, SharpenOptions};
 use crate::split::{self, SplitOptions, SplitResult};
 use crate::unwarp::{self, UnwarpOptions, UnwarpResult};
@@ -47,6 +48,8 @@ pub struct ConvertOptions {
     pub max_pages: Option<usize>,
     /// 中間画像を残すフォルダ (指定しなければ一時フォルダを使い、終了時に消す)
     pub work_dir: Option<PathBuf>,
+    /// 入力フォルダの superbook.json (ページごとの手動調整) を使う
+    pub use_project_file: bool,
 }
 
 impl Default for ConvertOptions {
@@ -64,6 +67,7 @@ impl Default for ConvertOptions {
             pdf: PdfOptions::default(),
             max_pages: None,
             work_dir: None,
+            use_project_file: true,
         }
     }
 }
@@ -112,24 +116,44 @@ pub struct ConvertReport {
     pub output_size_px: (u32, u32),
 }
 
+/// 入力画像 1 枚分の補正結果。
+pub struct ImageResult {
+    /// 回転・平面化の後、分割の前の画像 (手動で分割位置を決める画面用)
+    pub stage: image::RgbImage,
+    /// 補正後のページ (見開きなら 2 ページ)
+    pub pages: Vec<(image::RgbImage, PageReport)>,
+}
+
 /// 入力画像 1 枚分の補正を行う。見開きなら左右 2 ページに分けて、それぞれを補正する。
-/// 処理: 読み込み → 回転 → 見開き分割 → 大きさの正規化 → 傾き補正 → 歪み補正 → 影の除去 → 本文の外接矩形。
+/// 処理: 読み込み → 回転 → 平面化 → 見開き分割 → 大きさの正規化 → 傾き補正 → 歪み補正 → 影の除去 → 本文の外接矩形。
 /// 書き出し時と同じ処理なので、UI のプレビューにも使う。
 pub fn process_image(file: &Path, options: &ConvertOptions) -> Result<Vec<(image::RgbImage, PageReport)>> {
-    let mut img = input::rotate_cw(input::load_page(file)?, options.rotate);
-    let unwarp_result = options.unwarp.as_ref().map(|o| {
-        let (out, r) = unwarp::unwarp(&img, o);
+    Ok(process_image_with(file, options, &PageOverride::default())?.pages)
+}
+
+/// `process_image` に、その画像の手動調整を反映した版。
+pub fn process_image_with(file: &Path, options: &ConvertOptions, ovr: &PageOverride) -> Result<ImageResult> {
+    let mut img = input::rotate_cw(input::load_page(file)?, ovr.rotate.unwrap_or(options.rotate));
+    let unwarp_options = match ovr.unwarp {
+        Some(false) => None,
+        Some(true) => Some(options.unwarp.clone().unwrap_or_default()),
+        None => options.unwarp.clone(),
+    };
+    let unwarp_result = unwarp_options.map(|o| {
+        let (out, r) = unwarp::unwarp(&img, &o);
         img = out;
         r
     });
 
-    let (halves, split_result) = match &options.split {
-        Some(o) => split::split_spread(&img, o),
-        None => (vec![img], SplitResult::default()),
+    let (halves, split_result) = match (ovr.split, &options.split) {
+        (Some(SplitOverride::None), _) => (vec![img.clone()], SplitResult::default()),
+        (Some(SplitOverride::At(r)), _) => split::split_at(&img, Some((r.clamp(0.0, 1.0) * img.width() as f64).round() as u32)),
+        (None, Some(o)) => split::split_spread(&img, o),
+        (None, None) => (vec![img.clone()], SplitResult::default()),
     };
     let n = halves.len();
 
-    halves
+    let pages = halves
         .into_iter()
         .enumerate()
         .map(|(i, half)| {
@@ -140,14 +164,15 @@ pub fn process_image(file: &Path, options: &ConvertOptions) -> Result<Vec<(image
                 half: if n > 1 { Some(i as u8) } else { None },
                 ..Default::default()
             };
-            let img = process_page_image(half, options, &mut report);
-            Ok((img, report))
+            let img = process_page_image(half, options, ovr, i as u8, &mut report);
+            (img, report)
         })
-        .collect()
+        .collect();
+    Ok(ImageResult { stage: img, pages })
 }
 
 // 1 ページ分 (分割後) の補正
-fn process_page_image(img: image::RgbImage, options: &ConvertOptions, report: &mut PageReport) -> image::RgbImage {
+fn process_page_image(img: image::RgbImage, options: &ConvertOptions, ovr: &PageOverride, half: u8, report: &mut PageReport) -> image::RgbImage {
     let mut img = input::fit_to_box(&img, options.page_box.0, options.page_box.1);
 
     if let Some(o) = &options.deskew {
@@ -155,7 +180,12 @@ fn process_page_image(img: image::RgbImage, options: &ConvertOptions, report: &m
         img = out;
         report.deskew = Some(r);
     }
-    if let Some(o) = &options.dewarp {
+    let dewarp_options = match ovr.dewarp {
+        Some(false) => None,
+        Some(true) => Some(options.dewarp.clone().unwrap_or_default()),
+        None => options.dewarp.clone(),
+    };
+    if let Some(o) = &dewarp_options {
         let (out, r) = dewarp::dewarp(&img, o);
         img = out;
         report.dewarp = Some(r);
@@ -164,7 +194,10 @@ fn process_page_image(img: image::RgbImage, options: &ConvertOptions, report: &m
         img = illumination::normalize_illumination(&img, o);
     }
     if let Some(o) = &options.layout {
-        report.content_box = layout::content_box(&img, o);
+        report.content_box = match ovr.content.get(&half) {
+            Some(r) => r.to_px(img.width(), img.height()),
+            None => layout::content_box(&img, o),
+        };
     }
     img
 }
@@ -185,7 +218,20 @@ pub fn convert_dir_cancellable(
     progress: &(dyn Fn(Progress) + Sync),
     cancel: &AtomicBool,
 ) -> Result<ConvertReport> {
-    let mut files = input::list_images(input_dir)?;
+    let project = if options.use_project_file {
+        Project::load(input_dir)?
+    } else {
+        Project::default()
+    };
+    let files: Vec<(PathBuf, PageOverride)> = input::list_images(input_dir)?
+        .into_iter()
+        .map(|f| {
+            let o = project.get(input_dir, &f);
+            (f, o)
+        })
+        .filter(|(_, o)| !o.skip)
+        .collect();
+    let mut files = files;
     if let Some(n) = options.max_pages {
         files.truncate(n);
     }
@@ -208,7 +254,7 @@ pub fn convert_dir_cancellable(
 }
 
 fn convert_files(
-    files: &[PathBuf],
+    files: &[(PathBuf, PageOverride)],
     work_dir: &Path,
     output_pdf: &Path,
     options: &ConvertOptions,
@@ -228,9 +274,10 @@ fn convert_files(
     let pages: Vec<(PageReport, PathBuf, (u32, u32))> = files
         .par_iter()
         .enumerate()
-        .map(|(i, file)| -> Result<Vec<_>> {
+        .map(|(i, (file, ovr))| -> Result<Vec<_>> {
             check_cancel()?;
-            let results = process_image(file, options)?
+            let results = process_image_with(file, options, ovr)?
+                .pages
                 .into_iter()
                 .enumerate()
                 .map(|(h, (img, report))| -> Result<_> {
