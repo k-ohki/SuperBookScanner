@@ -58,7 +58,7 @@ namespace SuperBookTools.App
     {
         [ConsoleCommand(
             "ConvertPdf command",
-            "ConvertPdf [srcDir] [/dst:dstDir] [/ocr:yes|no]",
+            "ConvertPdf [srcDir] [/dst:dstDir] [/ocr:yes|no] [/dewarp:yes|no]",
             "ConvertPdf command")]
         public static async Task<int> ConvertPdf(ConsoleService c, string cmdName, string str)
         {
@@ -67,6 +67,7 @@ namespace SuperBookTools.App
                 new ConsoleParam("[srcDir]", ConsoleService.Prompt, "Source directory path: ", ConsoleService.EvalNotEmpty, null),
                 new ConsoleParam("dst", ConsoleService.Prompt, "Destination directory path: ", ConsoleService.EvalNotEmpty, null),
                 new ConsoleParam("ocr", ConsoleService.Prompt, "Perform Japanese High-Quality OCR? (Y/N): ", null, null),
+                new ConsoleParam("dewarp"),
             };
             ConsoleParamValueList vl = c.ParseCommandList(cmdName, str, args);
 
@@ -89,6 +90,9 @@ namespace SuperBookTools.App
             SuperPerformPdfOptions options = new SuperPerformPdfOptions {/* MaxPagesForDebug = 120, SaveDebugPng = true, SkipRealesrgan = true */ };
 
             bool performOcr = vl["ocr"].BoolValue;
+
+            // 本の綴じ目 (ノド) 付近の湾曲補正 (既定は無効)
+            options.Dewarp = vl["dewarp"].BoolValue;
 
             if (performOcr)
             {
@@ -161,6 +165,32 @@ namespace SuperBookTools.App
             }
 
             $"\n\n<< ConvertPdf Result >>\nnumTotal = {numTotal}, numSkip = {numSkip}, numOk = {numOk}, numError = {numError}\n\n"._Error();
+
+            return 0;
+        }
+
+        [ConsoleCommand(
+            "DewarpImages command",
+            "DewarpImages [srcDir] [/dst:dstDir]",
+            "Corrects the curvature of text lines near the book spine (gutter) for all images in srcDir")]
+        public static async Task<int> DewarpImages(ConsoleService c, string cmdName, string str)
+        {
+            ConsoleParam[] args =
+            {
+                new ConsoleParam("[srcDir]", ConsoleService.Prompt, "Source directory path: ", ConsoleService.EvalNotEmpty, null),
+                new ConsoleParam("dst", ConsoleService.Prompt, "Destination directory path: ", ConsoleService.EvalNotEmpty, null),
+            };
+            ConsoleParamValueList vl = c.ParseCommandList(cmdName, str, args);
+
+            string srcDir = PP.RemoveLastSeparatorChar(await Lfs.NormalizePathAsync(vl.DefaultParam.StrValue, normalizeRelativePathIfSupported: true));
+            string dstDir = PP.RemoveLastSeparatorChar(await Lfs.NormalizePathAsync(vl["dst"].StrValue, normalizeRelativePathIfSupported: true));
+
+            if (srcDir._IsSamei(dstDir))
+            {
+                throw new CoresException("srcDir must not be same to dstDir.");
+            }
+
+            await SuperPdfUtil.DewarpImagesInDirAsync(srcDir, dstDir, maxCpu: Env.NumCpus);
 
             return 0;
         }

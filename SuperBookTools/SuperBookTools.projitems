@@ -12,6 +12,7 @@
     <EmbeddedResource Include="$(MSBuildThisFileDirectory)ResourceRoot/**/*" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)Basic\BookDewarp.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Basic\SuperPdfUtil.cs" />
   </ItemGroup>
 </Project>

@@ -1809,6 +1809,12 @@ public class SuperPerformPdfOptions
     public int MaxPagesForDebug = int.MaxValue;
     public bool SaveDebugPng = false;
     public bool SkipRealesrgan = false;
+
+    // 本の綴じ目 (ノド) 付近の湾曲補正 (BookDewarp.cs)。既定は無効
+    public bool Dewarp = false;
+
+    // 無効時は JSON に出さず、既存の OK ファイルのダイジェストを変えないようにする
+    public bool ShouldSerializeDewarp() => Dewarp;
 }
 
 public class SuperPdfResult
@@ -1926,6 +1932,12 @@ public static class SuperPdfUtil
             }
         }
 
+        // 本の綴じ目 (ノド) 付近の湾曲を補正 (realesrgan の前に、元の解像度で行う)
+        if (options.Dewarp)
+        {
+            await DewarpImagesInDirAsync(pdf_extracted_dir2, pdf_extracted_dir2, ".bmp", maxCpu: Env.NumCpus, cancel: cancel);
+        }
+
         // realesrgan で鮮明化
         await using (var realesrgan = new AiUtilRealEsrganEngine(SuperBookExternalTools.Settings))
         {
@@ -1989,6 +2001,39 @@ public static class SuperPdfUtil
         {
             PnOcrMetaData = result,
         };
+    }
+
+    /// <summary>
+    /// ディレクトリ内の画像の綴じ目 (ノド) 付近の湾曲を補正する。srcDir と dstDir は同じでもよい (上書き)。
+    /// </summary>
+    public static async Task DewarpImagesInDirAsync(string srcDir, string dstDir, string extensions = ".bmp .png .jpg .jpeg .tif .tiff",
+        BookDewarpOptions? dewarpOptions = null, int maxCpu = 1, CancellationToken cancel = default)
+    {
+        await Lfs.CreateDirectoryAsync(dstDir, cancel: cancel);
+
+        var files = (await Lfs.EnumDirectoryAsync(srcDir, cancel: cancel)).Where(x => x.IsFile && x.Name._IsExtensionMatch(extensions)).OrderBy(x => x.Name, StrCmpi).ToList();
+
+        await Task.Run(() =>
+        {
+            Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, maxCpu), CancellationToken = cancel }, file =>
+            {
+                using var src = Cv2.ImRead(file.FullPath, ImreadModes.Unchanged);
+                if (src.Empty())
+                {
+                    throw new CoresLibException($"Failed to load image '{file.FullPath}'");
+                }
+
+                using var dst = BookDewarper.Dewarp(src, dewarpOptions, out var result);
+
+                Con.WriteLine($"Dewarp '{file.Name}': {result}");
+
+                string dstPath = PP.Combine(dstDir, file.Name);
+                if (result.Applied || dstPath._IsSamei(file.FullPath) == false)
+                {
+                    Cv2.ImWrite(dstPath, dst);
+                }
+            });
+        }, cancel);
     }
 
     /// <summary>
