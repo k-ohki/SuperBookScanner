@@ -42,6 +42,8 @@ cargo build --release
 ./target/release/superbook convert ~/Scans -o ~/Books --recursive
 
 # 主なオプション
+#   --rotate 270          読み込み後に回す角度 (横向きに撮った写真など。時計回り)
+#   --no-unwarp           写真の平面化 (紙の範囲・台形・反り・背景) をしない (平らなスキャンなど)
 #   --rtl                 右綴じ (縦書きの本)
 #   --sharpen             AI 鮮明化 (--sharpen-scale 2 で 600dpi 相当、--sharpen-model で モデル変更)
 #   --no-dewarp           歪み補正をしない (平らなスキャンなど)
@@ -50,12 +52,17 @@ cargo build --release
 #   --work-dir DIR        中間画像と report.json (各ページの傾き・歪み補正の結果) を残す
 ./target/release/superbook convert --help
 
+# 写真の平面化だけを 1 枚で試す
+./target/release/superbook unwarp photo.jpg out.png --rotate 270
+
 # 歪み補正だけを 1 枚で試す (--debug で検出した行を描いた画像を出力)
 ./target/release/superbook dewarp page.jpg out.png --debug lines.png
 ```
 
 AI 鮮明化の実行ファイルは、`SUPERBOOK_REALESRGAN` 環境変数 → `superbook` と同じフォルダ → `mac/third_party/realesrgan/` → PATH の順に探す (`--realesrgan` で直接指定も可)。
 低い解像度 (`--page-long-side` を小さくした場合など) で鮮明化すると、小さな文字が別の字の形に変わることがあるので注意。
+
+写真の平面化には学習済みモデル UVDoc (MIT, https://github.com/tanguymagne/UVDoc) を ONNX に変換した `mac/models/uvdoc.onnx` を使う (Rust だけの ONNX ランタイム tract で CPU 推論、1 枚 1 秒ほど)。`SUPERBOOK_UVDOC` 環境変数 → 実行ファイルの隣 → .app の Resources → `mac/models/` の順に探す。見つからなければ平面化をとばす。
 
 対応形式: jpg / png / tif / webp / bmp / gif / heic (heic は macOS の `sips` で変換)。`_` で始まるファイル・フォルダは無視する。
 

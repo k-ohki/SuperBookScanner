@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, State};
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub rotate: u16,
+    pub unwarp: bool,
     pub split: bool,
     pub deskew: bool,
     pub dewarp: bool,
@@ -31,6 +32,7 @@ impl Settings {
         let d = ConvertOptions::default();
         ConvertOptions {
             rotate: self.rotate,
+            unwarp: self.unwarp.then(|| d.unwarp.clone().unwrap_or_default()),
             split: self.split.then(|| d.split.clone().unwrap_or_default()),
             deskew: self.deskew.then(|| d.deskew.clone().unwrap_or_default()),
             dewarp: self.dewarp.then(|| d.dewarp.clone().unwrap_or_default()),

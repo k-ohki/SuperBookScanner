@@ -11,5 +11,6 @@ pub mod pdf;
 pub mod pipeline;
 pub mod sharpen;
 pub mod split;
+pub mod unwarp;
 
 pub use pipeline::{convert_dir, convert_dir_cancellable, process_image, ConvertOptions, ConvertReport, Progress};

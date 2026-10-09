@@ -24,6 +24,12 @@ enum Command {
         /// サブフォルダをまとめて変換する
         #[arg(short, long)]
         recursive: bool,
+        /// 写真のページの平面化 (紙の範囲・台形・反り。UVDoc) をしない
+        #[arg(long)]
+        no_unwarp: bool,
+        /// 平面化モデル (uvdoc.onnx) の場所
+        #[arg(long)]
+        unwarp_model: Option<PathBuf>,
         /// 傾き補正をしない
         #[arg(long)]
         no_deskew: bool,
@@ -72,6 +78,15 @@ enum Command {
     },
     /// 1 枚の見開き画像を左右に分ける (動作確認用)。出力は <out_prefix>_1.png / _2.png
     Split { input: PathBuf, out_prefix: PathBuf },
+    /// 1 枚の写真の平面化だけを行う (動作確認用)
+    Unwarp {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(long, default_value_t = 0, value_parser = parse_rotation)]
+        rotate: u16,
+        #[arg(long)]
+        model: Option<PathBuf>,
+    },
     /// 1 枚の画像の歪み補正だけを行う (動作確認用)。--debug で検出した行の画像も出す
     Dewarp {
         input: PathBuf,
@@ -88,6 +103,8 @@ fn main() -> Result<()> {
             input,
             output,
             recursive,
+            no_unwarp,
+            unwarp_model,
             no_deskew,
             no_dewarp,
             no_illumination,
@@ -109,6 +126,11 @@ fn main() -> Result<()> {
             opts.page_box = (((page_long_side as f64) * 2480.0 / 3508.0).round() as u32, page_long_side);
             opts.pdf.dpi = 300.0 * page_long_side as f64 / 3508.0;
             opts.rotate = rotate;
+            if no_unwarp {
+                opts.unwarp = None;
+            } else if let Some(u) = opts.unwarp.as_mut() {
+                u.model = unwarp_model;
+            }
             if no_deskew {
                 opts.deskew = None;
             }
@@ -152,6 +174,11 @@ fn main() -> Result<()> {
             for (i, p) in pages.iter().enumerate() {
                 p.save(format!("{}_{}.png", out_prefix.display(), i + 1))?;
             }
+            Ok(())
+        }
+        Command::Unwarp { input, output, rotate, model } => {
+            let r = book_core::unwarp::unwarp_file(&input, &output, rotate, &book_core::unwarp::UnwarpOptions { model })?;
+            println!("{}", serde_json_string(&r));
             Ok(())
         }
         Command::Dewarp { input, output, debug } => {

@@ -162,6 +162,7 @@ export default function App() {
               <option value={270}>左に 90°</option>
             </select>
           </label>
+          <Check label="写真の紙を平らにする (台形・反り・背景)" value={settings.unwarp} onChange={(v) => set("unwarp", v)} />
           <Check label="見開きを左右に分ける" value={settings.split} onChange={(v) => set("split", v)} />
 
           <h3>補正</h3>
@@ -310,9 +311,11 @@ function PageInfo({ pages }: { pages: PreviewPage[] }) {
         const side = pages.length > 1 ? (i === 0 ? "左: " : "右: ") : "";
         const skew = r.deskew ? `傾き ${r.deskew.angle_deg.toFixed(2)}°` : "傾き補正なし";
         const warp = r.dewarp ? (r.dewarp.applied ? `歪み ${Math.round(r.dewarp.max_displacement_px)}px を補正` : "歪み補正なし (行が見つからない)") : "歪み補正オフ";
+        const flat = r.unwarp && !r.unwarp.applied ? `平面化できず (${r.unwarp.message}) · ` : "";
         return (
           <li key={i}>
             {side}
+            {flat}
             {skew} · {warp}
           </li>
         );

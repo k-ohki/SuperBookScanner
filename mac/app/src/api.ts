@@ -4,6 +4,7 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 export type Settings = {
   rotate: 0 | 90 | 180 | 270;
+  unwarp: boolean;
   split: boolean;
   deskew: boolean;
   dewarp: boolean;
@@ -18,6 +19,7 @@ export type Settings = {
 
 export const defaultSettings: Settings = {
   rotate: 0,
+  unwarp: true,
   split: true,
   deskew: true,
   dewarp: true,
@@ -36,6 +38,7 @@ export type Rect = { x: number; y: number; w: number; h: number };
 
 export type PageReport = {
   source: string;
+  unwarp: { applied: boolean; message: string } | null;
   deskew: { angle_deg: number; applied: boolean } | null;
   dewarp: { applied: boolean; message: string; max_displacement_px: number } | null;
   content_box: Rect | null;

@@ -18,6 +18,7 @@ use crate::layout::{self, LayoutOptions, Rect};
 use crate::pdf::{self, PdfOptions};
 use crate::sharpen::{self, SharpenOptions};
 use crate::split::{self, SplitOptions, SplitResult};
+use crate::unwarp::{self, UnwarpOptions, UnwarpResult};
 use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,8 @@ pub struct ConvertOptions {
     pub page_box: (u32, u32),
     /// 読み込み後に時計回りに回す角度 (0 / 90 / 180 / 270)。横向きに撮った写真用
     pub rotate: u16,
+    /// 写真のページの平面化 (紙の範囲・台形・反り。UVDoc)。分割の前に見開きのまま行う
+    pub unwarp: Option<UnwarpOptions>,
     /// 見開き分割
     pub split: Option<SplitOptions>,
     pub deskew: Option<DeskewOptions>,
@@ -51,6 +54,7 @@ impl Default for ConvertOptions {
         Self {
             page_box: (2480, 3508),
             rotate: 0,
+            unwarp: Some(UnwarpOptions::default()),
             split: Some(SplitOptions::default()),
             deskew: Some(DeskewOptions::default()),
             dewarp: Some(DewarpOptions::default()),
@@ -92,6 +96,7 @@ pub enum Progress {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PageReport {
     pub source: PathBuf,
+    pub unwarp: Option<UnwarpResult>,
     pub deskew: Option<DeskewResult>,
     pub dewarp: Option<DewarpResult>,
     pub content_box: Option<Rect>,
@@ -111,7 +116,12 @@ pub struct ConvertReport {
 /// 処理: 読み込み → 回転 → 見開き分割 → 大きさの正規化 → 傾き補正 → 歪み補正 → 影の除去 → 本文の外接矩形。
 /// 書き出し時と同じ処理なので、UI のプレビューにも使う。
 pub fn process_image(file: &Path, options: &ConvertOptions) -> Result<Vec<(image::RgbImage, PageReport)>> {
-    let img = input::rotate_cw(input::load_page(file)?, options.rotate);
+    let mut img = input::rotate_cw(input::load_page(file)?, options.rotate);
+    let unwarp_result = options.unwarp.as_ref().map(|o| {
+        let (out, r) = unwarp::unwarp(&img, o);
+        img = out;
+        r
+    });
 
     let (halves, split_result) = match &options.split {
         Some(o) => split::split_spread(&img, o),
@@ -125,6 +135,7 @@ pub fn process_image(file: &Path, options: &ConvertOptions) -> Result<Vec<(image
         .map(|(i, half)| {
             let mut report = PageReport {
                 source: file.to_path_buf(),
+                unwarp: unwarp_result.clone(),
                 split: split_result.clone(),
                 half: if n > 1 { Some(i as u8) } else { None },
                 ..Default::default()
