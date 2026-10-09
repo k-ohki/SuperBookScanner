@@ -1,0 +1,16 @@
+[package]
+name = "superbook-mac"
+description = "SuperBookScanner (mac)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+book-app.workspace = true
+tauri.workspace = true
+# capabilities/default.json でプラグインの権限を使うため、ここでも直接依存する
+tauri-plugin-dialog.workspace = true
+tauri-plugin-opener.workspace = true

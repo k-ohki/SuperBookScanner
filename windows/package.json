@@ -1,0 +1,12 @@
+{
+  "name": "superbook-windows",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "postinstall": "npm --prefix ../ui ci",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.1"
+  }
+}

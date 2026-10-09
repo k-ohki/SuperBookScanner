@@ -1,0 +1,17 @@
+[package]
+name = "book-app"
+description = "SuperBookScanner のアプリ本体 (Tauri コマンド)。Mac 版・Windows 版で共通"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+book-core.workspace = true
+tauri.workspace = true
+tauri-plugin-dialog.workspace = true
+tauri-plugin-opener.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+base64 = "0.22"

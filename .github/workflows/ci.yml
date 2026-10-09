@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    paths: ["crates/**", "ui/**", "models/**", "mac/**", "windows/**", "Cargo.*", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["crates/**", "ui/**", "models/**", "mac/**", "windows/**", "Cargo.*", ".github/workflows/ci.yml"]
+
+jobs:
+  # 画像処理と CLI のテスト。macOS / Windows / Linux
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo build --release -p book-core -p book-cli
+      - run: cargo test --release -p book-core -p book-cli
+
+  # Mac アプリ (.app と .dmg)
+  app-macos:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: mac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm run tauri build -- --bundles app
+
+  # Windows アプリ: インストーラ (NSIS) を作り、成果物として保存する
+  app-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm run tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SuperBookScanner-windows-installer
+          path: target/release/bundle/nsis/*.exe
+      # Real-ESRGAN の取得スクリプトが動くか
+      - run: powershell -ExecutionPolicy Bypass -File scripts\fetch-realesrgan.ps1
+      - run: if (!(Test-Path ..\third_party\realesrgan\realesrgan-ncnn-vulkan.exe)) { exit 1 }
+        shell: pwsh

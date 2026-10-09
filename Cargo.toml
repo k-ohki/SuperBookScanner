@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/book-core",
+    "crates/book-cli",
+    "crates/book-app",
+    "mac/src-tauri",
+    "windows/src-tauri",
+]
+# `cargo build` / `cargo test` を直下で実行したときは共通部分だけを対象にする
+# (アプリは mac/ と windows/ で `npm run tauri build` でビルドする)
+default-members = ["crates/book-core", "crates/book-cli", "crates/book-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[workspace.dependencies]
+book-core = { path = "crates/book-core" }
+book-app = { path = "crates/book-app" }
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+[profile.dev]
+# 画像処理はデバッグビルドだと極端に遅いので、依存 crate だけは最適化する
+[profile.dev.package."*"]
+opt-level = 3
