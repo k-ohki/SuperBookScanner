@@ -1,5 +1,6 @@
 //! AI 鮮明化。Real-ESRGAN の ncnn 版 (`realesrgan-ncnn-vulkan`) を外部プログラムとして呼び出す。
 //! macOS 版は arm64 を含むユニバーサルバイナリで、MoltenVK 経由で Apple Silicon の GPU (Metal) で動く。
+//! Windows 版は Vulkan に対応した GPU (NVIDIA / AMD / Intel) で動く。
 //!
 //! realesrgan-x4plus は 4 倍にしか拡大できないので、4 倍にしてから `output_scale` 倍 (既定 2 倍) に縮小する。
 //! (C# 版の Real-ESRGAN 呼び出しの outscale = 2.0 と同じ出力解像度)
@@ -7,11 +8,16 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const BINARY_NAME: &str = "realesrgan-ncnn-vulkan";
+
+/// 実行ファイルのファイル名 (Windows では `.exe` が付く)。
+pub fn binary_file_name() -> String {
+    format!("{BINARY_NAME}{}", std::env::consts::EXE_SUFFIX)
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -46,31 +52,33 @@ impl Default for SharpenOptions {
 /// 実行ファイルを探す。順に: 環境変数 SUPERBOOK_REALESRGAN、自分の実行ファイルと同じフォルダ
 /// (およびその下の `realesrgan/`)、.app の `Contents/Resources/realesrgan/`、`mac/third_party/realesrgan/` (開発時)、PATH。
 pub fn find_binary() -> Option<PathBuf> {
+    let name = binary_file_name();
     if let Some(p) = std::env::var_os("SUPERBOOK_REALESRGAN") {
         let p = PathBuf::from(p);
         if p.is_file() {
             return Some(p);
         }
-        if p.join(BINARY_NAME).is_file() {
-            return Some(p.join(BINARY_NAME));
+        if p.join(&name).is_file() {
+            return Some(p.join(&name));
         }
     }
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join(BINARY_NAME));
-            candidates.push(dir.join("realesrgan").join(BINARY_NAME));
+            candidates.push(dir.join(&name));
+            candidates.push(dir.join("realesrgan").join(&name));
             // macOS の .app: Contents/MacOS/<exe> → Contents/Resources/realesrgan/
-            candidates.push(dir.join("../Resources/realesrgan").join(BINARY_NAME));
+            candidates.push(dir.join("../Resources/realesrgan").join(&name));
             // 開発時: mac/target/release/superbook や
             // mac/target/release/bundle/macos/SuperBookScanner.app/Contents/MacOS/ → mac/third_party/realesrgan/
+            // (Windows は mac\target\release\superbook-app.exe)
             for up in dir.ancestors().skip(1).take(7) {
-                candidates.push(up.join("third_party").join("realesrgan").join(BINARY_NAME));
+                candidates.push(up.join("third_party").join("realesrgan").join(&name));
             }
         }
     }
     if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|d| d.join(BINARY_NAME)));
+        candidates.extend(std::env::split_paths(&path).map(|d| d.join(&name)));
     }
     candidates.into_iter().find(|p| p.is_file())
 }
@@ -81,9 +89,9 @@ pub fn find_binary() -> Option<PathBuf> {
 pub fn upscale_dir(in_dir: &Path, out_dir: &Path, options: &SharpenOptions, on_file_done: &(dyn Fn(usize) + Sync), cancel: &AtomicBool) -> Result<()> {
     let binary = match &options.binary {
         Some(b) => b.clone(),
-        None => {
-            find_binary().with_context(|| format!("'{BINARY_NAME}' not found. Run mac/scripts/fetch-realesrgan.sh, or set SUPERBOOK_REALESRGAN to its path"))?
-        }
+        None => find_binary().with_context(|| {
+            format!("'{BINARY_NAME}' not found. Run mac/scripts/fetch-realesrgan.sh (Windows: fetch-realesrgan.ps1), or set SUPERBOOK_REALESRGAN to its path")
+        })?,
     };
     let models = options
         .models_dir
@@ -99,7 +107,7 @@ pub fn upscale_dir(in_dir: &Path, out_dir: &Path, options: &SharpenOptions, on_f
         .filter(|e| e.path().extension().is_some_and(|x| x == "png"))
         .count();
 
-    let mut cmd = Command::new(&binary);
+    let mut cmd = crate::process::command(&binary);
     cmd.arg("-i")
         .arg(in_dir)
         .arg("-o")

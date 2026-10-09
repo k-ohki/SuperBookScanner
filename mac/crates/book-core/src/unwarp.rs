@@ -48,6 +48,7 @@ pub fn find_model() -> Option<PathBuf> {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join(MODEL_FILE));
             candidates.push(dir.join("models").join(MODEL_FILE));
+            // Windows のインストール先: <exe> と同じフォルダの models/ (上の候補)
             // macOS の .app: Contents/MacOS/<exe> → Contents/Resources/models/
             candidates.push(dir.join("../Resources/models").join(MODEL_FILE));
             // 開発時: mac/target/release/superbook → mac/models/

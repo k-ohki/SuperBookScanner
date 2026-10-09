@@ -5,7 +5,7 @@ use image::{imageops, DynamicImage, ImageDecoder, ImageReader, RgbImage, RgbaIma
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
-/// 対応する画像の拡張子 (小文字)。heic/heif は macOS の `sips` で変換して読む。
+/// 対応する画像の拡張子 (小文字)。heic/heif は OS の機能 (macOS: `sips`、Windows: WIC) で変換して読む。
 pub const SUPPORTED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "gif", "heic", "heif"];
 
 /// フォルダ直下の画像ファイルを、ページ順 (ファイル名の自然順: 2.jpg < 10.jpg) に列挙する。
@@ -96,22 +96,58 @@ fn flatten_to_white(img: DynamicImage) -> RgbImage {
     out
 }
 
-// macOS 標準の sips で PNG に変換してから読む (image crate は HEIC を読めないため)
+// HEIC は image crate で読めないので、OS の機能で PNG に変換してから読む。
 fn load_heic(path: &Path) -> Result<RgbImage> {
     let tmp = std::env::temp_dir().join(format!("superbook-heic-{}-{}.png", std::process::id(), rand_suffix(path)));
-    let status = std::process::Command::new("sips")
-        .args(["-s", "format", "png"])
-        .arg(path)
-        .arg("--out")
-        .arg(&tmp)
-        .output();
-    match status {
-        Ok(o) if o.status.success() => {}
-        _ => bail!("cannot convert HEIC '{}' (requires macOS 'sips')", path.display()),
-    }
-    let img = load_page(&tmp);
+    let converted = convert_heic_to_png(path, &tmp);
+    let img = converted.and_then(|_| load_page(&tmp));
     let _ = std::fs::remove_file(&tmp);
     img
+}
+
+// macOS: 標準の sips を使う
+#[cfg(target_os = "macos")]
+fn convert_heic_to_png(src: &Path, dst: &Path) -> Result<()> {
+    let out = crate::process::command("sips")
+        .args(["-s", "format", "png"])
+        .arg(src)
+        .arg("--out")
+        .arg(dst)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => Ok(()),
+        _ => bail!("cannot convert HEIC '{}' (requires macOS 'sips')", src.display()),
+    }
+}
+
+// Windows: PowerShell から Windows の画像コーデック (WIC) で読む。
+// Microsoft Store の「HEIF 画像拡張機能」が入っている必要がある。
+#[cfg(windows)]
+fn convert_heic_to_png(src: &Path, dst: &Path) -> Result<()> {
+    const SCRIPT: &str = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName PresentationCore; \
+        $s=[IO.File]::OpenRead($env:SUPERBOOK_SRC); \
+        try { $d=[Windows.Media.Imaging.BitmapDecoder]::Create($s,'None','OnLoad'); \
+              $e=New-Object Windows.Media.Imaging.PngBitmapEncoder; \
+              $e.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($d.Frames[0])); \
+              $o=[IO.File]::Create($env:SUPERBOOK_DST); try { $e.Save($o) } finally { $o.Close() } } \
+        finally { $s.Close() }";
+    let out = crate::process::command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("SUPERBOOK_SRC", src)
+        .env("SUPERBOOK_DST", dst)
+        .output();
+    match out {
+        Ok(o) if o.status.success() && dst.is_file() => Ok(()),
+        _ => bail!(
+            "cannot convert HEIC '{}'. Install \"HEIF Image Extensions\" from the Microsoft Store, or convert the photos to JPEG",
+            src.display()
+        ),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn convert_heic_to_png(src: &Path, _dst: &Path) -> Result<()> {
+    bail!("cannot read HEIC '{}' on this OS. Convert the photos to JPEG", src.display())
 }
 
 fn rand_suffix(path: &Path) -> u64 {

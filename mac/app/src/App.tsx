@@ -5,6 +5,9 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import * as api from "./api";
 import type { FolderInfo, PageOverride, Preview, PreviewPage, Progress, RectF, Settings } from "./api";
 
+// Windows と macOS で表示を変える箇所 (ファイラーの名前、スクリプト名) のため
+const isWindows = navigator.userAgent.includes("Windows");
+
 type ExportState =
   | { phase: "idle" }
   | { phase: "running"; label: string; fraction: number }
@@ -197,7 +200,7 @@ export default function App() {
 
           <h3>AI 鮮明化</h3>
           <Check label="Real-ESRGAN で鮮明にする" value={settings.sharpen} disabled={!sharpenPath} onChange={(v) => set("sharpen", v)} />
-          {!sharpenPath && <p className="hint">realesrgan-ncnn-vulkan が見つかりません。mac/scripts/fetch-realesrgan.sh を実行してください。</p>}
+          {!sharpenPath && <p className="hint">realesrgan-ncnn-vulkan が見つかりません。{isWindows ? "mac\\scripts\\fetch-realesrgan.ps1" : "mac/scripts/fetch-realesrgan.sh"} を実行してください。</p>}
           {settings.sharpen && (
             <label className="row sub">
               解像度
@@ -324,7 +327,7 @@ export default function App() {
                 <p>書き出しました</p>
                 <p className="path">{exportState.output}</p>
                 <div className="buttons">
-                  <button onClick={() => revealItemInDir(exportState.output)}>Finder で表示</button>
+                  <button onClick={() => revealItemInDir(exportState.output)}>{isWindows ? "エクスプローラーで表示" : "Finder で表示"}</button>
                   <button className="primary" onClick={() => setExportState({ phase: "idle" })}>
                     閉じる
                   </button>

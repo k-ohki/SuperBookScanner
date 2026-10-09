@@ -1,5 +1,6 @@
 #!/bin/sh
 # AI 鮮明化に使う realesrgan-ncnn-vulkan (公式リリース v0.2.5.0) を mac/third_party/realesrgan/ に取得する。
+# Windows では fetch-realesrgan.ps1 を使う。
 # macOS 版は arm64 / x86_64 のユニバーサルバイナリで、Apple Silicon の GPU (Metal) で動く。
 set -eu
 
