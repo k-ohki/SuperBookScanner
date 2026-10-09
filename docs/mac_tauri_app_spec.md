@@ -89,12 +89,13 @@ mac/
 | M2 ✅ | AI 鮮明化 (ncnn sidecar)。余白の切り出し後のページだけを処理する | Mac で速度を計測 |
 | M3 ✅ | Tauri アプリ: フォルダ選択、補正前後のプレビュー、書き出し | Mac で起動確認 |
 | M4 ✅ | 写真の平面化 (UVDoc)・見開き分割 + 手動調整の画面 (画像ごとの回転・平面化・歪み補正・分割位置・本文の範囲・除外。入力フォルダの superbook.json に保存し、CLI の書き出しにも反映) | スマホで撮った見開き写真で確認 |
-| M5 (任意) | ONNX + CoreML による AI 鮮明化、ページ番号の検出、OCR | |
+| M5 ✅ | Windows 版: 同じ Tauri アプリ・Rust コアを Windows でもビルドする。Real-ESRGAN は Windows 版 (.exe)、heic は WIC で読む。インストーラは NSIS | CI (windows-latest) でビルド・テスト、実機で起動確認 |
+| M6 (任意) | ONNX + CoreML による AI 鮮明化、ページ番号の検出、OCR | |
 
 M1 は Mac がなくても開発・テストできるので、ここから始める。M3 以降は Mac 上での確認が必要。
 
 ## 7. C# 版との関係
 
-- 開発は Mac 版 (このディレクトリ構成) に絞る。C# 版 (Windows) のコードはリポジトリから削除した。必要ならフォーク元か git の履歴を参照する
+- 開発はこのディレクトリ構成 (Mac 版・Windows 版共通) で行う。C# 版 (Windows) のコードはリポジトリから削除した。必要ならフォーク元か git の履歴を参照する
 - 歪み補正は C# 版 PR #1 (閉じた) のアルゴリズムを移植したもので、今後は Rust 版 (`mac/crates/book-core/src/dewarp.rs`) を正とする
 - リポジトリは AGPL-3.0。Rust 版も同じライセンスにする。ScanTailor (GPL-3.0) のコードは使わず、考え方だけを参考にする

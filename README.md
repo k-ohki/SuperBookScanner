@@ -1,10 +1,11 @@
 # SuperBookScanner
 
-本のページを撮った写真やスキャン画像のフォルダから、読みやすく綺麗な PDF を作る Mac アプリです。
+本のページを撮った写真やスキャン画像のフォルダから、読みやすく綺麗な PDF を作る Mac / Windows アプリです。
 
 スマホで撮った見開きの写真を入れると、机や指などの背景を落とし、紙の台形・反り・ノドの湾曲を平らにします。さらに左右のページに分け、傾き・影を直して余白をそろえ、1 冊の PDF にまとめます。必要なら AI (Real-ESRGAN) で文字を鮮明にもできます。
 
-- Apple Silicon の macOS で動くネイティブアプリ (Tauri 2 + Rust)。Python・OpenCV・CUDA は不要
+- macOS (Apple Silicon) と Windows で動くネイティブアプリ (Tauri 2 + Rust)。Python・OpenCV・CUDA は不要
+- Mac 版と Windows 版は同じソースコードからビルドする
 - 自動で補正したあと、プレビューを見ながら画像ごとに手で直せる
 - 同じ処理をコマンドライン (`superbook`) でも実行できる
 
@@ -33,14 +34,21 @@ MacBook Pro (Apple Silicon) で、iPhone の写真 (3213×5712、見開き 2 枚
 | 通常 (平面化・分割・各種補正・PDF) | 約 3 秒 (2 枚分) |
 | AI 鮮明化つき (600dpi 相当) | 約 2 分 30 秒 (1 ページ約 40 秒、GPU を使用) |
 
-AI 鮮明化は時間がかかり、処理中は GPU をほぼ使い切ります。まず鮮明化なしで仕上がりを確認するのがおすすめです。
+AI 鮮明化は時間がかかり、処理中は GPU をほぼ使い切ります。まず鮮明化なしで仕上がりを確認するのがおすすめです。Windows での速さは CPU・GPU によって変わります。
 
 ## 動作環境
 
-- macOS 13 以降、Apple Silicon (M1 以降)
-- ビルドに必要なもの: [Rust](https://rustup.rs/) (stable)、Node.js 20 以降と npm、Xcode Command Line Tools (`xcode-select --install`)
+| | Mac | Windows |
+|---|---|---|
+| OS | macOS 13 以降、Apple Silicon (M1 以降) | Windows 10 / 11 (64bit) |
+| AI 鮮明化 | Apple Silicon の GPU (Metal) | Vulkan 対応の GPU (NVIDIA / AMD / Intel) |
+| ビルドに必要なもの | [Rust](https://rustup.rs/) (stable)、Node.js 20 以降、Xcode Command Line Tools (`xcode-select --install`) | [Rust](https://rustup.rs/) (stable、MSVC)、Node.js 20 以降、[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) の「C++ によるデスクトップ開発」 |
+
+Windows 版は画面の表示に WebView2 を使います。Windows 11 には最初から入っています。入っていない場合は、インストーラが自動で取得します。
 
 ## ビルドとインストール
+
+どちらの OS でも、手順は同じです。
 
 ```sh
 git clone https://github.com/k-ohki/SuperBookScanner.git
@@ -48,6 +56,8 @@ cd SuperBookScanner/mac/app
 npm ci
 npm run tauri build
 ```
+
+### Mac
 
 できあがるもの:
 
@@ -59,15 +69,34 @@ npm run tauri build
 > 署名していないので、初回は Finder でアプリを右クリック →「開く」で起動してください。
 > DMG を作るときに `hdiutil: couldn't unmount ... Resource busy` で失敗したら、ビルド中にマウントされたディスクイメージ上でアプリを起動していないか確認してください。そのアプリを終了し、`/Volumes/dmg.*` を取り出してからビルドし直してください。
 
+### Windows
+
+できあがるもの: インストーラ `mac\target\release\bundle\nsis\SuperBookScanner_<版>_x64-setup.exe`
+
+インストーラを実行すると、ユーザーごとに (管理者権限なしで) `%LOCALAPPDATA%\SuperBookScanner` にインストールされ、スタートメニューに登録されます。写真の平面化モデルも同梱されます。
+
+自分でビルドしなくても、GitHub Actions の CI (`ci` ワークフローの `app-windows`) がインストーラを作り、成果物 `SuperBookScanner-windows-installer` として保存しています。実行結果のページからダウンロードできます。
+
+> 署名していないので、初回は SmartScreen の警告が出ます。「詳細情報」→「実行」で進めてください。
+
 ### AI 鮮明化を使う場合
 
-Real-ESRGAN (ncnn 版の `realesrgan-ncnn-vulkan`) は同梱していません。初回だけ次のスクリプトで取得してください (GitHub の [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) のリリース zip をダウンロードし、チェックサムを確かめてから `mac/third_party/realesrgan/` に置きます)。
+Real-ESRGAN (ncnn 版の `realesrgan-ncnn-vulkan`) は同梱していません。初回だけ次のスクリプトで取得してください。GitHub の [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) のリリース zip をダウンロードし、チェックサムを確かめてから `mac/third_party/realesrgan/` に置きます。
 
 ```sh
+# Mac
 ./mac/scripts/fetch-realesrgan.sh
 ```
 
-このリポジトリでビルドした `.app` は、ここに置いた実行ファイルを自動で見つけます。別の場所に置く場合は、環境変数 `SUPERBOOK_REALESRGAN` でその場所を指定してください。
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File mac\scripts\fetch-realesrgan.ps1
+
+# インストールしたアプリで使う場合は、アプリの隣に置く
+powershell -ExecutionPolicy Bypass -File mac\scripts\fetch-realesrgan.ps1 -Dest "$env:LOCALAPPDATA\SuperBookScanner\realesrgan"
+```
+
+このリポジトリでビルドしたアプリは、`mac/third_party/realesrgan/` に置いた実行ファイルを自動で見つけます。別の場所に置く場合は、環境変数 `SUPERBOOK_REALESRGAN` でその場所を指定してください。
 
 ## アプリの使い方
 
@@ -100,6 +129,8 @@ cargo build --release
 ./target/release/superbook convert --help
 ```
 
+Windows では `.\target\release\superbook.exe convert C:\Photos\book1 -o C:\Books\book1.pdf --rotate 270` のように実行します。
+
 主なオプション:
 
 | オプション | 内容 |
@@ -112,19 +143,21 @@ cargo build --release
 | `--no-project` | アプリで保存した画像ごとの調整 (`superbook.json`) を使わない |
 | `--work-dir DIR` | 中間画像と各ページの補正結果 (`report.json`) を残す |
 
-対応する画像形式: jpg / png / tif / webp / bmp / gif / heic (heic は macOS の `sips` で読み込み)。名前が `_` で始まるファイル・フォルダは無視します。
+対応する画像形式: jpg / png / tif / webp / bmp / gif / heic。名前が `_` で始まるファイル・フォルダは無視します。
+
+heic (iPhone の写真) は OS の機能で読み込みます。Mac は標準の `sips` を使います。Windows は Microsoft Store の「HEIF 画像拡張機能」が必要です。読み込めない場合は、iPhone の「設定 → カメラ → フォーマット」で「互換性優先」(JPEG) にして撮るか、JPEG に変換してください。
 
 ## リポジトリの構成
 
 | パス | 内容 |
 |---|---|
-| [`mac/`](mac/) | アプリ・CLI・画像処理のソース一式。開発者向けの説明は [`mac/README.md`](mac/README.md) |
+| [`mac/`](mac/) | アプリ・CLI・画像処理のソース一式 (Mac 版・Windows 版の両方。フォルダ名は最初に Mac 版から作った名残)。開発者向けの説明は [`mac/README.md`](mac/README.md) |
 | [`docs/`](docs/) | 仕様 ([`mac_tauri_app_spec.md`](docs/mac_tauri_app_spec.md)) |
-| [`.github/workflows/`](.github/workflows/) | CI (テストとアプリのビルド) |
+| [`.github/workflows/`](.github/workflows/) | CI (macOS・Windows・Linux でのテスト、Mac アプリのビルド、Windows インストーラの作成) |
 
 ## フォーク元について
 
-このリポジトリは、登 大遊 氏の [DN_SuperBook_PDF_Converter](https://github.com/dnobori/DN_SuperBook_PDF_Converter) (Windows 用、C#) をフォークしたものです。フォーク元は「スキャンした書籍の PDF」を鮮明にするツールです。このプロジェクトでは目的を「本の写真・スキャン画像のフォルダから PDF を作る」に変え、Mac 版を Rust と Tauri で新しく作り直しました。Windows 版 (C#) のコードはこのリポジトリから削除しました。Windows 版 (ページ番号の検出、OCR など) を使いたい場合は、フォーク元を参照してください。
+このリポジトリは、登 大遊 氏の [DN_SuperBook_PDF_Converter](https://github.com/dnobori/DN_SuperBook_PDF_Converter) (Windows 用、C#) をフォークしたものです。フォーク元は「スキャンした書籍の PDF」を鮮明にするツールです。このプロジェクトでは目的を「本の写真・スキャン画像のフォルダから PDF を作る」に変え、Rust と Tauri で新しく作り直しました (最初に Mac 版を作り、同じコードで Windows 版もビルドできるようにしました)。フォーク元の C# のコードは、このリポジトリから削除しています。フォーク元の機能 (スキャン PDF の入力、ページ番号の検出、OCR など) を使いたい場合は、フォーク元を参照してください。
 
 ## ライセンス
 
