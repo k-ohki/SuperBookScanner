@@ -60,7 +60,7 @@ cargo build --release
 ./target/release/superbook dewarp page.jpg out.png --debug lines.png
 ```
 
-AI 鮮明化の実行ファイルは、`SUPERBOOK_REALESRGAN` 環境変数 → `superbook` と同じフォルダ → `mac/third_party/realesrgan/` → PATH の順に探す (`--realesrgan` で直接指定も可)。
+AI 鮮明化の実行ファイルは、`SUPERBOOK_REALESRGAN` 環境変数 → 実行ファイルと同じフォルダ → .app の `Contents/Resources/realesrgan/` → `mac/third_party/realesrgan/` (ビルドした .app からも見つかる) → PATH の順に探す (`--realesrgan` で直接指定も可)。
 低い解像度 (`--page-long-side` を小さくした場合など) で鮮明化すると、小さな文字が別の字の形に変わることがあるので注意。
 
 写真の平面化には学習済みモデル UVDoc (MIT, https://github.com/tanguymagne/UVDoc) を ONNX に変換した `mac/models/uvdoc.onnx` を使う (Rust だけの ONNX ランタイム tract で CPU 推論、1 枚 1 秒ほど)。`SUPERBOOK_UVDOC` 環境変数 → 実行ファイルの隣 → .app の Resources → `mac/models/` の順に探す。見つからなければ平面化をとばす。

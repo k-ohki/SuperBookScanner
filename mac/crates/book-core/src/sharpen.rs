@@ -44,7 +44,7 @@ impl Default for SharpenOptions {
 }
 
 /// 実行ファイルを探す。順に: 環境変数 SUPERBOOK_REALESRGAN、自分の実行ファイルと同じフォルダ
-/// (およびその下の `realesrgan/`)、`mac/third_party/realesrgan/` (開発時)、PATH。
+/// (およびその下の `realesrgan/`)、.app の `Contents/Resources/realesrgan/`、`mac/third_party/realesrgan/` (開発時)、PATH。
 pub fn find_binary() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("SUPERBOOK_REALESRGAN") {
         let p = PathBuf::from(p);
@@ -60,8 +60,11 @@ pub fn find_binary() -> Option<PathBuf> {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join(BINARY_NAME));
             candidates.push(dir.join("realesrgan").join(BINARY_NAME));
-            // 開発時: mac/target/release/superbook → mac/third_party/realesrgan/
-            for up in dir.ancestors().skip(1).take(3) {
+            // macOS の .app: Contents/MacOS/<exe> → Contents/Resources/realesrgan/
+            candidates.push(dir.join("../Resources/realesrgan").join(BINARY_NAME));
+            // 開発時: mac/target/release/superbook や
+            // mac/target/release/bundle/macos/SuperBookScanner.app/Contents/MacOS/ → mac/third_party/realesrgan/
+            for up in dir.ancestors().skip(1).take(7) {
                 candidates.push(up.join("third_party").join("realesrgan").join(BINARY_NAME));
             }
         }
