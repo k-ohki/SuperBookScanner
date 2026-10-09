@@ -118,13 +118,13 @@ cargo build --release
 
 | パス | 内容 |
 |---|---|
-| [`mac/`](mac/) | **Mac 版 (このプロジェクトの本体)**。開発者向けの説明は [`mac/README.md`](mac/README.md) |
+| [`mac/`](mac/) | アプリ・CLI・画像処理のソース一式。開発者向けの説明は [`mac/README.md`](mac/README.md) |
 | [`docs/`](docs/) | 仕様 ([`mac_tauri_app_spec.md`](docs/mac_tauri_app_spec.md)) |
-| `SuperBookTools/`, `SuperBookToolsApp/`, `external_tools/`, `internal_libs/`, `*.sln`, `doc_img/` | フォーク元の Windows 版 (C#)。Mac 版では使っていない |
+| [`.github/workflows/`](.github/workflows/) | CI (テストとアプリのビルド) |
 
 ## フォーク元について
 
-このリポジトリは、登 大遊 氏の [DN_SuperBook_PDF_Converter](https://github.com/dnobori/DN_SuperBook_PDF_Converter) (Windows 用、C#) をフォークしたものです。フォーク元は「スキャンした書籍の PDF」を鮮明にするツールです。このプロジェクトでは目的を「本の写真・スキャン画像のフォルダから PDF を作る」に変え、Mac 版を Rust と Tauri で新しく作り直しました。Windows 版のコードはリポジトリに残っていますが、手を入れていません。Windows 版の使い方 (ページ番号の検出、OCR など) は、フォーク元の README を参照してください。
+このリポジトリは、登 大遊 氏の [DN_SuperBook_PDF_Converter](https://github.com/dnobori/DN_SuperBook_PDF_Converter) (Windows 用、C#) をフォークしたものです。フォーク元は「スキャンした書籍の PDF」を鮮明にするツールです。このプロジェクトでは目的を「本の写真・スキャン画像のフォルダから PDF を作る」に変え、Mac 版を Rust と Tauri で新しく作り直しました。Windows 版 (C#) のコードはこのリポジトリから削除しました。Windows 版 (ページ番号の検出、OCR など) を使いたい場合は、フォーク元を参照してください。
 
 ## ライセンス
 

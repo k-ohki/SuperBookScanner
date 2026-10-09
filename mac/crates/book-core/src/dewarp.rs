@@ -1,6 +1,6 @@
 //! 本の綴じ目 (ノド) 付近の湾曲 (行の曲がり) を補正する。
 //!
-//! C# 版 `SuperBookTools/Basic/BookDewarp.cs` (PR #1) の Rust 移植。アルゴリズムは同じで、
+//! C# 版 `BookDewarp.cs` (PR #1、C# 版はリポジトリから削除済み) の Rust 移植。アルゴリズムは同じで、
 //! ScanTailor の dewarping の考え方 (テキスト行のトレース → 歪みモデル → 面の展開) を参考にした独自実装。
 //!
 //! 処理の流れ:
