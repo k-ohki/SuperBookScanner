@@ -70,9 +70,73 @@ namespace SuperBookTools.App
             };
             ConsoleParamValueList vl = c.ParseCommandList(cmdName, str, args);
 
-            string srcDir = vl.DefaultParam.StrValue;
-            string dstDir = vl["dst"].StrValue;
+            var (srcDir, dstDir) = await PrepareSrcDstDirAsync(vl.DefaultParam.StrValue, vl["dst"].StrValue);
 
+            SuperPerformPdfOptions options = new SuperPerformPdfOptions {/* MaxPagesForDebug = 120, SaveDebugPng = true, SkipRealesrgan = true */ };
+
+            var srcFiles = (await Lfs.EnumDirectoryAsync(srcDir, true)).Where(x => x.IsFile && x.Name.StartsWith("_") == false && x.Name._IsExtensionMatch(".pdf")).OrderBy(x => x.FullPath, StrCmpi)._Shuffle().ToList();
+
+            var jobs = srcFiles.Select(src =>
+            {
+                string dstPath = PP.Combine(dstDir, PP.GetRelativeFileName(src.FullPath, srcDir));
+                return new ConvertJob(src.FullPath, dstPath, () => SuperPdfUtil.PerformPdfAsync(src.FullPath, dstPath, options));
+            }).ToList();
+
+            await RunConvertJobsAsync(cmdName, jobs, dstDir, vl["ocr"].BoolValue);
+
+            return 0;
+        }
+
+        [ConsoleCommand(
+            "ConvertImages command",
+            "ConvertImages [srcDir] [/dst:dstDir] [/ocr:yes|no]",
+            "Convert book page images (jpg/png/tif/...) into PDF. Each directory that directly contains image files is treated as one book.")]
+        public static async Task<int> ConvertImages(ConsoleService c, string cmdName, string str)
+        {
+            ConsoleParam[] args =
+            {
+                new ConsoleParam("[srcDir]", ConsoleService.Prompt, "Source directory path: ", ConsoleService.EvalNotEmpty, null),
+                new ConsoleParam("dst", ConsoleService.Prompt, "Destination directory path: ", ConsoleService.EvalNotEmpty, null),
+                new ConsoleParam("ocr", ConsoleService.Prompt, "Perform Japanese High-Quality OCR? (Y/N): ", null, null),
+            };
+            ConsoleParamValueList vl = c.ParseCommandList(cmdName, str, args);
+
+            var (srcDir, dstDir) = await PrepareSrcDstDirAsync(vl.DefaultParam.StrValue, vl["dst"].StrValue);
+
+            SuperPerformPdfOptions options = new SuperPerformPdfOptions();
+
+            // srcDir 自身とそのサブディレクトリのうち、画像ファイルを直接含むものを 1 冊として扱う
+            // ("_" で始まるディレクトリと、出力先ディレクトリ配下は除外)
+            List<string> bookDirs = new() { srcDir };
+            bookDirs.AddRange((await Lfs.EnumDirectoryAsync(srcDir, true))
+                .Where(x => x.IsDirectory && x.IsCurrentOrParentDirectory == false)
+                .Select(x => x.FullPath)
+                .Where(x => PP.GetRelativeFileName(x, srcDir)._Split(StringSplitOptions.RemoveEmptyEntries, '/', '\\').Any(y => y.StartsWith("_")) == false)
+                .Where(x => x._IsSamei(dstDir) == false && x.StartsWith(dstDir + PP.DirectorySeparator, StringComparison.OrdinalIgnoreCase) == false)
+                .OrderBy(x => x, NaturalStrComparer.Instance));
+
+            List<ConvertJob> jobs = new();
+
+            foreach (string bookDir in bookDirs)
+            {
+                if ((await SuperPdfUtil.EnumImageFilesAsync(bookDir)).Count == 0) continue;
+
+                // srcDir/foo/bar/*.jpg -> dstDir/foo/bar.pdf, srcDir/*.jpg -> dstDir/<srcDir の名前>.pdf
+                string relativePath = bookDir._IsSamei(srcDir) ? PP.GetFileName(srcDir) : PP.GetRelativeFileName(bookDir, srcDir);
+                string dstPath = PP.Combine(dstDir, PP.RemoveLastSeparatorChar(relativePath) + ".pdf");
+
+                jobs.Add(new ConvertJob(bookDir, dstPath, () => SuperPdfUtil.PerformImageDirAsync(bookDir, dstPath, options)));
+            }
+
+            await RunConvertJobsAsync(cmdName, jobs, dstDir, vl["ocr"].BoolValue);
+
+            return 0;
+        }
+
+        record ConvertJob(string SrcPath, string DstPath, Func<Task<bool>> RunAsync);
+
+        static async Task<(string SrcDir, string DstDir)> PrepareSrcDstDirAsync(string srcDir, string dstDir)
+        {
             srcDir = PP.RemoveLastSeparatorChar(await Lfs.NormalizePathAsync(srcDir, normalizeRelativePathIfSupported: true));
             dstDir = PP.RemoveLastSeparatorChar(await Lfs.NormalizePathAsync(dstDir, normalizeRelativePathIfSupported: true));
 
@@ -86,10 +150,11 @@ namespace SuperBookTools.App
 
             await Lfs.CreateDirectoryAsync(dstDir);
 
-            SuperPerformPdfOptions options = new SuperPerformPdfOptions {/* MaxPagesForDebug = 120, SaveDebugPng = true, SkipRealesrgan = true */ };
+            return (srcDir, dstDir);
+        }
 
-            bool performOcr = vl["ocr"].BoolValue;
-
+        static async Task RunConvertJobsAsync(string cmdName, List<ConvertJob> jobs, string dstDir, bool performOcr)
+        {
             if (performOcr)
             {
                 ""._Print();
@@ -99,9 +164,7 @@ namespace SuperBookTools.App
                 ""._Print();
             }
 
-            var srcFiles = (await Lfs.EnumDirectoryAsync(srcDir, true)).Where(x => x.IsFile && x.Name.StartsWith("_") == false && x.Name._IsExtensionMatch(".pdf")).OrderBy(x => x.FullPath, StrCmpi)._Shuffle().ToList();
-
-            int numTotal = srcFiles.Count();
+            int numTotal = jobs.Count;
             int numOk = 0;
             int numError = 0;
             int numSkip = 0;
@@ -112,32 +175,30 @@ namespace SuperBookTools.App
 
             List<string> errorFilesList = new();
 
-            foreach (var src in srcFiles)
+            foreach (var job in jobs)
             {
                 currentNumber++;
-                string relativePath = PP.GetRelativeFileName(src.FullPath, srcDir);
-                string dstPath = PP.Combine(dstDir, relativePath);
 
-                $"<< {currentNumber} / {numTotal} >> '{src.FullPath}' Start"._Error();
+                $"<< {currentNumber} / {numTotal} >> '{job.SrcPath}' Start"._Error();
 
                 try
                 {
-                    if (await SuperPdfUtil.PerformPdfAsync(src.FullPath, dstPath, options) == false)
+                    if (await job.RunAsync() == false)
                     {
                         numSkip++;
-                        $"<< {currentNumber} / {numTotal} >> '{src.FullPath}' Skip"._Error();
+                        $"<< {currentNumber} / {numTotal} >> '{job.SrcPath}' Skip"._Error();
                     }
                     else
                     {
                         numOk++;
-                        $"<< {currentNumber} / {numTotal} >> '{src.FullPath}' OK"._Error();
+                        $"<< {currentNumber} / {numTotal} >> '{job.SrcPath}' OK"._Error();
                     }
                 }
                 catch (Exception ex)
                 {
-                    Con.WriteLine($"<< {currentNumber} / {numTotal} >> Error: {src.FullPath} -> {dstPath}");
+                    Con.WriteLine($"<< {currentNumber} / {numTotal} >> Error: {job.SrcPath} -> {job.DstPath}");
                     ex._Error();
-                    errorFilesList.Add(src.FullPath);
+                    errorFilesList.Add(job.SrcPath);
                     numError++;
                 }
             }
@@ -160,9 +221,7 @@ namespace SuperBookTools.App
                 }
             }
 
-            $"\n\n<< ConvertPdf Result >>\nnumTotal = {numTotal}, numSkip = {numSkip}, numOk = {numOk}, numError = {numError}\n\n"._Error();
-
-            return 0;
+            $"\n\n<< {cmdName} Result >>\nnumTotal = {numTotal}, numSkip = {numSkip}, numOk = {numOk}, numError = {numError}\n\n"._Error();
         }
     }
 }

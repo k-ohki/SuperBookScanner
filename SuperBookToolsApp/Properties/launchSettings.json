@@ -6,6 +6,10 @@
     "Command - ConvertPdf": {
       "commandName": "Project",
       "commandLineArgs": "ConvertPdf"
+    },
+    "Command - ConvertImages": {
+      "commandName": "Project",
+      "commandLineArgs": "ConvertImages"
     }
   }
 }

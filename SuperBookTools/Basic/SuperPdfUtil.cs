@@ -1817,6 +1817,49 @@ public class SuperPdfResult
     public SuperPerformPdfOptions? Options;
 }
 
+// ファイル名中の数字を数値として比較する (例: "2.jpg" < "10.jpg")
+public sealed class NaturalStrComparer : IComparer<string>
+{
+    public static readonly NaturalStrComparer Instance = new();
+
+    public int Compare(string? x, string? y)
+    {
+        if (x == null || y == null) return string.Compare(x, y, StringComparison.Ordinal);
+
+        int i = 0, j = 0;
+
+        while (i < x.Length && j < y.Length)
+        {
+            if (char.IsDigit(x[i]) && char.IsDigit(y[j]))
+            {
+                int si = i, sj = j;
+                while (i < x.Length && char.IsDigit(x[i])) i++;
+                while (j < y.Length && char.IsDigit(y[j])) j++;
+
+                string nx = x.Substring(si, i - si).TrimStart('0');
+                string ny = y.Substring(sj, j - sj).TrimStart('0');
+
+                if (nx.Length != ny.Length) return nx.Length.CompareTo(ny.Length);
+
+                int r = string.CompareOrdinal(nx, ny);
+                if (r != 0) return r;
+            }
+            else
+            {
+                int r = char.ToUpperInvariant(x[i]).CompareTo(char.ToUpperInvariant(y[j]));
+                if (r != 0) return r;
+                i++;
+                j++;
+            }
+        }
+
+        int rest = (x.Length - i).CompareTo(y.Length - j);
+        if (rest != 0) return rest;
+
+        return string.Compare(x, y, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
 public static class SuperPdfUtil
 {
     static readonly RefInt TmpCounter = new();
@@ -1847,7 +1890,16 @@ public static class SuperPdfUtil
 
         Con.WriteLine($"[PerformPdfAsync]: Starting '{srcPdfPath}' -> '{dstPdfPath}' ...");
 
-        var result = await PerformPdfMainAsync(srcPdfPath, dstPdfPath, options, cancel: cancel);
+        // PDF から画像を抽出
+        ImageMagickExtractImageOption extractOptions = new ImageMagickExtractImageOption
+        {
+            Format = ImageMagickExtractImageFormat.Bmp,
+            NumPages = options.MaxPagesForDebug,
+        };
+
+        var result = await PerformPdfMainAsync(
+            extractedDir => SuperBookExternalTools.ImageMagick.ExtractImagesFromPdfAsync(srcPdfPath, extractedDir, extractOptions, cancel: cancel),
+            dstPdfPath, options, cancel: cancel);
 
         result.Options = options;
 
@@ -1861,7 +1913,103 @@ public static class SuperPdfUtil
         return true;
     }
 
-    static async Task<SuperPdfResult> PerformPdfMainAsync(string srcPdfPath, string dstPdfPath, SuperPerformPdfOptions? options = null, CancellationToken cancel = default)
+    // 画像ファイルが入ったディレクトリ (1 ディレクトリ = 1 冊) を処理して PDF を生成する
+    public static async Task<bool> PerformImageDirAsync(string srcImageDir, string dstPdfPath, SuperPerformPdfOptions? options = null, bool useOkFile = true, CancellationToken cancel = default)
+    {
+        options ??= new();
+
+        var srcImageFiles = await EnumImageFilesAsync(srcImageDir, cancel);
+
+        if (srcImageFiles.Count == 0)
+        {
+            throw new CoresLibException($"No image files found in '{srcImageDir}'.");
+        }
+
+        // ファイル名・サイズ・更新日時のいずれかが変われば再処理する
+        StringBuilder digestSrc = new();
+        foreach (var file in srcImageFiles)
+        {
+            digestSrc.AppendLine($"{file.Name} {file.LastWriteTime.Ticks} {file.Size}");
+        }
+        digestSrc.AppendLine(options._ObjectToJson());
+        string digest = digestSrc.ToString()._Digest();
+
+        if (useOkFile)
+        {
+            if (await Lfs.IsOkFileExistsAsync(dstPdfPath, digest, cancel: cancel))
+            {
+                Con.WriteLine($"PerformImageDirAsync: '{srcImageDir}' -> '{dstPdfPath}': Already exists. Skip.");
+                return false;
+            }
+        }
+
+        Con.WriteLine($"[PerformImageDirAsync]: Starting '{srcImageDir}' ({srcImageFiles.Count} images) -> '{dstPdfPath}' ...");
+
+        var result = await PerformPdfMainAsync(
+            extractedDir => ConvertImageFilesToPageBmpsAsync(srcImageFiles, extractedDir, options.MaxPagesForDebug, cancel),
+            dstPdfPath, options, cancel: cancel);
+
+        result.Options = options;
+
+        if (useOkFile)
+        {
+            await Lfs.WriteOkFileAsync(dstPdfPath, result, digest, cancel: cancel);
+        }
+
+        Con.WriteLine($"[PerformImageDirAsync]: Completed: '{srcImageDir}' -> '{dstPdfPath}'");
+
+        return true;
+    }
+
+    public static readonly IReadOnlyList<string> SupportedImageExtensions = new[] { ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp", ".gif" };
+
+    // ディレクトリ直下の画像ファイルをページ順 (ファイル名の自然順: page2 < page10) に列挙する
+    public static async Task<List<FileSystemEntity>> EnumImageFilesAsync(string dirPath, CancellationToken cancel = default)
+    {
+        return (await Lfs.EnumDirectoryAsync(dirPath, false, cancel: cancel))
+            .Where(x => x.IsFile && x.Name.StartsWith("_") == false && x.Name.StartsWith(".") == false && x.Name._IsExtensionMatch(SupportedImageExtensions))
+            .OrderBy(x => x.Name, NaturalStrComparer.Instance)
+            .ToList();
+    }
+
+    // 画像ファイル群を、PDF から抽出した場合と同じ形式 (page_00000.bmp, 24bit, A4 300dpi 相当に収まるサイズ) に変換する
+    static async Task ConvertImageFilesToPageBmpsAsync(IReadOnlyList<FileSystemEntity> srcImageFiles, string dstDir, int maxPages, CancellationToken cancel = default)
+    {
+        var size = new ImageMagickExtractImageOption();
+
+        await Lfs.CreateDirectoryAsync(dstDir, cancel: cancel);
+
+        int pageIndex = 0;
+
+        foreach (var file in srcImageFiles.Take(maxPages))
+        {
+            using var image = await SixLabors.ImageSharp.Image.LoadAsync<Rgba32>(file.FullPath, cancel);
+
+            // スマホ撮影画像の EXIF 回転情報を反映する
+            image.Mutate(ctx => ctx.AutoOrient());
+
+            // ImageMagick の -resize WxH と同様に、縦横比を保って枠内に収まるよう拡大縮小する
+            double scale = Math.Min((double)size.Width / image.Width, (double)size.Height / image.Height);
+            int width = Math.Max(1, (int)Math.Round(image.Width * scale));
+            int height = Math.Max(1, (int)Math.Round(image.Height * scale));
+
+            // 透過部分は紙と同じ白にする
+            image.Mutate(ctx => ctx.Resize(width, height, KnownResamplers.Lanczos3).BackgroundColor(SixLabors.ImageSharp.Color.White));
+
+            using var rgbImage = image.CloneAs<Rgb24>();
+            rgbImage.Metadata.ResolutionUnits = SixLabors.ImageSharp.Metadata.PixelResolutionUnit.PixelsPerInch;
+            rgbImage.Metadata.HorizontalResolution = size.Density;
+            rgbImage.Metadata.VerticalResolution = size.Density;
+
+            await rgbImage.SaveAsBmpAsync(PP.Combine(dstDir, $"page_{pageIndex:D5}.bmp"),
+                new SixLabors.ImageSharp.Formats.Bmp.BmpEncoder { BitsPerPixel = SixLabors.ImageSharp.Formats.Bmp.BmpBitsPerPixel.Pixel24 },
+                cancel);
+
+            pageIndex++;
+        }
+    }
+
+    static async Task<SuperPdfResult> PerformPdfMainAsync(Func<string, Task> extractPageImagesAsync, string dstPdfPath, SuperPerformPdfOptions? options = null, CancellationToken cancel = default)
     {
         options ??= new();
 
@@ -1895,13 +2043,8 @@ public static class SuperPdfUtil
         string pdf_tmp_dir = PP.Combine(tmpDirRoot, "99_pdf_tmp_dir");
         await Lfs.CreateDirectoryAsync(pdf_tmp_dir, cancel: cancel);
 
-        // PDF から画像を抽出
-        ImageMagickExtractImageOption extractOptions = new ImageMagickExtractImageOption
-        {
-            Format = ImageMagickExtractImageFormat.Bmp,
-            NumPages = options.MaxPagesForDebug,
-        };
-        await SuperBookExternalTools.ImageMagick.ExtractImagesFromPdfAsync(srcPdfPath, pdf_extracted_dir, extractOptions, cancel: cancel);
+        // ページ画像を page_00000.bmp 形式で抽出
+        await extractPageImagesAsync(pdf_extracted_dir);
 
         // 抽出された画像の上下左右 0.5% をトリミングする (スキャンで黒枠などが映っている場合があるため)
         var bmpFiles = (await Lfs.EnumDirectoryAsync(pdf_extracted_dir, cancel: cancel)).Where(x => x.IsFile && x.Name._IsExtensionMatch(".bmp")).OrderBy(x => x.Name, StrCmpi);
@@ -1936,11 +2079,8 @@ public static class SuperPdfUtil
                 Skip = options.SkipRealesrgan,
             };
 
+            // ページ画像は常に BMP で抽出される
             string ext = ".bmp";
-            if (extractOptions.Format == ImageMagickExtractImageFormat.Png)
-            {
-                ext = ".png";
-            }
 
             await realesrgan.PerformAsync(pdf_extracted_dir2, ext, pdf_ai_result_dir, aiOpt, cancel: cancel);
         }

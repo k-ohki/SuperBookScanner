@@ -357,6 +357,20 @@ ConvertPdf --help
 ```
 を呼び出してみてください。
 
+### 4.3.1. 画像フォルダからの変換 (ConvertImages コマンド)
+スキャナやスマホで撮影したページ画像 (`.jpg` `.jpeg` `.png` `.bmp` `.tif` `.tiff` `.webp` `.gif`) から PDF を作るには、`ConvertPdf` の代わりに
+
+```
+ConvertImages [srcDir] /dst:dstDir /ocr:yes|no
+```
+
+を使います。処理内容は `ConvertPdf` と同じです。
+
+- 画像ファイルを直接含むディレクトリ 1 つが 1 冊になります。`srcDir/shelf/book1/*.jpg` は `dstDir/shelf/book1.pdf` に、`srcDir/*.jpg` は `dstDir/<srcDir の名前>.pdf` になります。
+- ページ順はファイル名の自然順です (`2.jpg` → `10.jpg` の順)。
+- `_` で始まるファイル・ディレクトリは無視します。
+- スマホ写真の EXIF 回転情報は自動で反映され、透過部分は白になります。マルチページ TIFF / アニメーション GIF は最初の 1 枚だけを使います。
+
 
 ## 3.5. 動作中の注意
 変換処理は、PDF からの画像生成、AI 画像鮮明化 (RealEsrgan) や内部的ページ番号検出のための OCR 処理、オプションの YomiToku による高精度日本語 AI-OCR 処理に、かなりの時間 (1 冊の書籍あたり十数分 ～ 数十分) を要します。その速度は、CPU や GPU の性能により異なります。
