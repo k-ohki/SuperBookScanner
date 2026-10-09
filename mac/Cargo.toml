@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/book-core", "crates/book-cli"]
+members = ["crates/book-core", "crates/book-cli", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

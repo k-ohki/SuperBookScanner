@@ -45,6 +45,9 @@ enum Command {
         /// 右綴じ (縦書きの本)
         #[arg(long)]
         rtl: bool,
+        /// 読み込んだ画像を時計回りに回す角度 (0 / 90 / 180 / 270)。横向きに撮った写真用
+        #[arg(long, default_value_t = 0, value_parser = parse_rotation)]
+        rotate: u16,
         /// 入力画像を揃える長辺のピクセル数 (既定 3508 = A4 300dpi)
         #[arg(long, default_value_t = 3508)]
         page_long_side: u32,
@@ -67,6 +70,8 @@ enum Command {
         #[arg(long)]
         work_dir: Option<PathBuf>,
     },
+    /// 1 枚の見開き画像を左右に分ける (動作確認用)。出力は <out_prefix>_1.png / _2.png
+    Split { input: PathBuf, out_prefix: PathBuf },
     /// 1 枚の画像の歪み補正だけを行う (動作確認用)。--debug で検出した行の画像も出す
     Dewarp {
         input: PathBuf,
@@ -91,6 +96,7 @@ fn main() -> Result<()> {
             quality,
             rtl,
             page_long_side,
+            rotate,
             sharpen,
             sharpen_scale,
             sharpen_model,
@@ -102,6 +108,7 @@ fn main() -> Result<()> {
             // A4 の縦横比 (2480 x 3508) のまま長辺を合わせる
             opts.page_box = (((page_long_side as f64) * 2480.0 / 3508.0).round() as u32, page_long_side);
             opts.pdf.dpi = 300.0 * page_long_side as f64 / 3508.0;
+            opts.rotate = rotate;
             if no_deskew {
                 opts.deskew = None;
             }
@@ -137,6 +144,15 @@ fn main() -> Result<()> {
             } else {
                 convert_one(&input, &output, &opts)
             }
+        }
+        Command::Split { input, out_prefix } => {
+            let img = book_core::input::load_page(&input)?;
+            let (pages, r) = book_core::split::split_spread(&img, &Default::default());
+            println!("{}", serde_json_string(&r));
+            for (i, p) in pages.iter().enumerate() {
+                p.save(format!("{}_{}.png", out_prefix.display(), i + 1))?;
+            }
+            Ok(())
         }
         Command::Dewarp { input, output, debug } => {
             let img = book_core::input::load_page(&input)?;
@@ -232,4 +248,11 @@ fn collect_books(dir: &Path, output: &Path, books: &mut Vec<PathBuf>) -> Result<
 
 fn serde_json_string<T: serde::Serialize>(v: &T) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
+}
+
+fn parse_rotation(s: &str) -> Result<u16, String> {
+    match s {
+        "0" | "90" | "180" | "270" => Ok(s.parse().unwrap()),
+        _ => Err("must be 0, 90, 180 or 270".into()),
+    }
 }

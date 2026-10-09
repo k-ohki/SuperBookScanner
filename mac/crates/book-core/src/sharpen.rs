@@ -74,7 +74,8 @@ pub fn find_binary() -> Option<PathBuf> {
 
 /// フォルダ内の PNG をすべて 4 倍に鮮明化して、out_dir に同じ名前の PNG で書き出す。
 /// `on_file_done` は出力ファイルが 1 つ増えるたびに呼ばれる (進捗表示用)。
-pub fn upscale_dir(in_dir: &Path, out_dir: &Path, options: &SharpenOptions, on_file_done: &(dyn Fn(usize) + Sync)) -> Result<()> {
+/// `cancel` が true になると、実行中のプロセスを止めてエラーを返す。
+pub fn upscale_dir(in_dir: &Path, out_dir: &Path, options: &SharpenOptions, on_file_done: &(dyn Fn(usize) + Sync), cancel: &AtomicBool) -> Result<()> {
     let binary = match &options.binary {
         Some(b) => b.clone(),
         None => {
@@ -143,10 +144,23 @@ pub fn upscale_dir(in_dir: &Path, out_dir: &Path, options: &SharpenOptions, on_f
                 std::thread::sleep(Duration::from_millis(500));
             }
         });
-        let status = child.wait();
+        let status = loop {
+            if cancel.load(Ordering::SeqCst) {
+                let _ = child.kill();
+            }
+            match child.try_wait() {
+                Ok(Some(st)) => break Ok(st),
+                Ok(None) => std::thread::sleep(Duration::from_millis(200)),
+                Err(e) => break Err(e),
+            }
+        };
         finished.store(true, Ordering::SeqCst);
         status
     })?;
+
+    if cancel.load(Ordering::SeqCst) {
+        bail!(crate::pipeline::CANCELLED);
+    }
 
     let log = tail.join().unwrap_or_default();
     if !status.success() || count_png(out_dir) < total {

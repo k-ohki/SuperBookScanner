@@ -121,6 +121,16 @@ fn rand_suffix(path: &Path) -> u64 {
     h.finish()
 }
 
+/// 時計回りに 90 度単位で回す (それ以外の角度はそのまま返す)。
+pub fn rotate_cw(img: RgbImage, degrees: u16) -> RgbImage {
+    match degrees % 360 {
+        90 => imageops::rotate90(&img),
+        180 => imageops::rotate180(&img),
+        270 => imageops::rotate270(&img),
+        _ => img,
+    }
+}
+
 /// 縦横比を保ったまま、`max_w` x `max_h` の枠に収まるよう拡大・縮小する
 /// (C# 版の ImageMagick `-resize WxH` と同じ。既定は A4 300dpi の 2480x3508)。
 pub fn fit_to_box(img: &RgbImage, max_w: u32, max_h: u32) -> RgbImage {
