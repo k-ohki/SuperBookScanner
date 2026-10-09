@@ -3,7 +3,7 @@
 本のページ画像 (スキャン・スマホ撮影) のフォルダから、読みやすい PDF を作るツール。
 仕様は [`../docs/mac_tauri_app_spec.md`](../docs/mac_tauri_app_spec.md)。
 
-現在は M1 (画像処理コア + CLI)。Tauri アプリ (M3) と AI 鮮明化 (M2) はこれから。
+現在は M2 まで (画像処理コア + CLI + AI 鮮明化)。Tauri アプリ (M3) はこれから。
 
 ## 構成
 
@@ -19,7 +19,8 @@
 3. 歪み補正: ノド付近の行の湾曲を直す (C# 版 PR #1 `BookDewarp.cs` の移植)
 4. 影・照明ムラの除去: 紙の明るさを推定して割り算し、紙を白に揃える
 5. 余白の統一: 本文の外側を白で埋め、全ページを同じ大きさ・同じ余白で切り出す
-6. PDF 出力: JPEG をそのまま埋め込む。グレースケールのページは自動でグレーの JPEG にする
+6. AI 鮮明化 (`--sharpen` のときだけ): Real-ESRGAN (ncnn 版) で 4 倍にしてから 2 倍 (600dpi 相当) に縮小する。Apple Silicon の GPU で動く
+7. PDF 出力: JPEG をそのまま埋め込む。グレースケールのページは自動でグレーの JPEG にする
 
 ## 使い方
 
@@ -33,11 +34,16 @@ cargo build --release
 # 1 冊 (画像フォルダ 1 つ) を PDF に
 ./target/release/superbook convert ~/Scans/book1 -o ~/Books/book1.pdf
 
+# AI 鮮明化も行う (初回だけ realesrgan-ncnn-vulkan を取得する)
+./scripts/fetch-realesrgan.sh
+./target/release/superbook convert ~/Scans/book1 -o ~/Books/book1.pdf --sharpen
+
 # サブフォルダをまとめて (画像を含むフォルダごとに 1 冊)
 ./target/release/superbook convert ~/Scans -o ~/Books --recursive
 
 # 主なオプション
 #   --rtl                 右綴じ (縦書きの本)
+#   --sharpen             AI 鮮明化 (--sharpen-scale 2 で 600dpi 相当、--sharpen-model で モデル変更)
 #   --no-dewarp           歪み補正をしない (平らなスキャンなど)
 #   --margin 0.05         余白の大きさ
 #   --quality 85          JPEG の品質
@@ -47,6 +53,9 @@ cargo build --release
 # 歪み補正だけを 1 枚で試す (--debug で検出した行を描いた画像を出力)
 ./target/release/superbook dewarp page.jpg out.png --debug lines.png
 ```
+
+AI 鮮明化の実行ファイルは、`SUPERBOOK_REALESRGAN` 環境変数 → `superbook` と同じフォルダ → `mac/third_party/realesrgan/` → PATH の順に探す (`--realesrgan` で直接指定も可)。
+低い解像度 (`--page-long-side` を小さくした場合など) で鮮明化すると、小さな文字が別の字の形に変わることがあるので注意。
 
 対応形式: jpg / png / tif / webp / bmp / gif / heic (heic は macOS の `sips` で変換)。`_` で始まるファイル・フォルダは無視する。
 

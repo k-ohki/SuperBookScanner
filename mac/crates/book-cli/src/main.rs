@@ -45,6 +45,21 @@ enum Command {
         /// 右綴じ (縦書きの本)
         #[arg(long)]
         rtl: bool,
+        /// 入力画像を揃える長辺のピクセル数 (既定 3508 = A4 300dpi)
+        #[arg(long, default_value_t = 3508)]
+        page_long_side: u32,
+        /// AI 鮮明化 (Real-ESRGAN) を行う
+        #[arg(long)]
+        sharpen: bool,
+        /// 鮮明化後の解像度の倍率 (1〜4。2 なら 600dpi 相当)
+        #[arg(long, default_value_t = 2.0)]
+        sharpen_scale: f64,
+        /// 鮮明化のモデル (realesrgan-x4plus / realesrnet-x4plus など)
+        #[arg(long, default_value = "realesrgan-x4plus")]
+        sharpen_model: String,
+        /// realesrgan-ncnn-vulkan の実行ファイル (省略時は自動で探す)
+        #[arg(long)]
+        realesrgan: Option<PathBuf>,
         /// 先頭から N ページだけ処理する (動作確認用)
         #[arg(long)]
         max_pages: Option<usize>,
@@ -75,10 +90,18 @@ fn main() -> Result<()> {
             margin,
             quality,
             rtl,
+            page_long_side,
+            sharpen,
+            sharpen_scale,
+            sharpen_model,
+            realesrgan,
             max_pages,
             work_dir,
         } => {
             let mut opts = ConvertOptions::default();
+            // A4 の縦横比 (2480 x 3508) のまま長辺を合わせる
+            opts.page_box = (((page_long_side as f64) * 2480.0 / 3508.0).round() as u32, page_long_side);
+            opts.pdf.dpi = 300.0 * page_long_side as f64 / 3508.0;
             if no_deskew {
                 opts.deskew = None;
             }
@@ -95,6 +118,17 @@ fn main() -> Result<()> {
             }
             opts.pdf.jpeg_quality = quality;
             opts.pdf.right_to_left = rtl;
+            if sharpen && page_long_side < 2400 {
+                eprintln!("warning: --sharpen on low-resolution pages (--page-long-side {page_long_side}) can turn small letters into wrong shapes");
+            }
+            if sharpen {
+                opts.sharpen = Some(book_core::sharpen::SharpenOptions {
+                    binary: realesrgan,
+                    model: sharpen_model,
+                    output_scale: sharpen_scale,
+                    ..Default::default()
+                });
+            }
             opts.max_pages = max_pages;
             opts.work_dir = work_dir;
 
@@ -122,6 +156,7 @@ fn convert_one(input: &Path, output: &Path, opts: &ConvertOptions) -> Result<()>
     eprintln!("{} -> {}", input.display(), output.display());
     let progress = |p: Progress| match p {
         Progress::PageProcessed { done, total, file } => eprintln!("  [{done}/{total}] {file}"),
+        Progress::PageSharpened { done, total } => eprintln!("  sharpen [{done}/{total}]"),
         Progress::PageEncoded { done, total } if done == total => eprintln!("  PDF: {total} pages"),
         Progress::Finished { output } => eprintln!("  done: {}", output.display()),
         _ => {}

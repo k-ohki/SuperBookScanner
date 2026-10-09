@@ -9,5 +9,6 @@ pub mod input;
 pub mod layout;
 pub mod pdf;
 pub mod pipeline;
+pub mod sharpen;
 
 pub use pipeline::{convert_dir, ConvertOptions, ConvertReport, Progress};

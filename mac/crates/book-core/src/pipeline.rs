@@ -5,7 +5,8 @@
 //! 3. 歪み補正 (ノドの湾曲)
 //! 4. 影・照明ムラの除去
 //! 5. 余白の統一 (本文の外側を白で埋め、全ページを同じ大きさに切り出す)
-//! 6. PDF 出力
+//! 6. AI 鮮明化 (任意。切り出した後のページを Real-ESRGAN で 4 倍にし、output_scale 倍に縮小する)
+//! 7. PDF 出力
 //!
 //! 1〜4 はページごとに並列で処理し、中間画像は作業フォルダに PNG で保存する (全ページをメモリに載せないため)。
 
@@ -15,6 +16,7 @@ use crate::illumination::{self, IlluminationOptions};
 use crate::input;
 use crate::layout::{self, LayoutOptions, Rect};
 use crate::pdf::{self, PdfOptions};
+use crate::sharpen::{self, SharpenOptions};
 use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -30,6 +32,8 @@ pub struct ConvertOptions {
     pub dewarp: Option<DewarpOptions>,
     pub illumination: Option<IlluminationOptions>,
     pub layout: Option<LayoutOptions>,
+    /// AI 鮮明化 (None なら行わない)
+    pub sharpen: Option<SharpenOptions>,
     pub pdf: PdfOptions,
     /// 先頭から何ページだけ処理するか (動作確認用)
     pub max_pages: Option<usize>,
@@ -45,6 +49,7 @@ impl Default for ConvertOptions {
             dewarp: Some(DewarpOptions::default()),
             illumination: Some(IlluminationOptions::default()),
             layout: Some(LayoutOptions::default()),
+            sharpen: None,
             pdf: PdfOptions::default(),
             max_pages: None,
             work_dir: None,
@@ -61,7 +66,12 @@ pub enum Progress {
         total: usize,
         file: String,
     },
-    /// PDF 用の切り出しとエンコードが 1 ページ終わった
+    /// AI 鮮明化が 1 ページ終わった
+    PageSharpened {
+        done: usize,
+        total: usize,
+    },
+    /// PDF 用のエンコードが 1 ページ終わった
     PageEncoded {
         done: usize,
         total: usize,
@@ -172,41 +182,88 @@ fn convert_files(
         None => (None, vec![(0, 0); pages.len()]),
     };
 
-    // ---- 6: PDF ----
-    let encoded_count = AtomicUsize::new(0);
-    let encoded: Vec<pdf::EncodedPage> = pages
-        .par_iter()
-        .zip(origins.par_iter())
-        .map(|((report, path, _), &(ox, oy))| -> Result<_> {
-            let mut img = image::open(path)?.to_rgb8();
-            let img = match out_size {
-                Some((w, h)) => {
-                    if let Some(b) = report.content_box {
-                        let pad = (b.w.min(b.h) / 100).max(4);
-                        layout::fill_outside(&mut img, b, pad);
-                    }
-                    layout::crop_with_padding(&img, ox, oy, w, h)
+    // ---- 5 (続き): 切り出し ----
+    let crop_page = |(report, path, _): &(PageReport, PathBuf, (u32, u32)), (ox, oy): (i64, i64)| -> Result<image::RgbImage> {
+        let mut img = image::open(path)?.to_rgb8();
+        Ok(match out_size {
+            Some((w, h)) => {
+                if let Some(b) = report.content_box {
+                    let pad = (b.w.min(b.h) / 100).max(4);
+                    layout::fill_outside(&mut img, b, pad);
                 }
-                None => img,
-            };
-            let page = pdf::encode_page(&img, &options.pdf)?;
-            let n = encoded_count.fetch_add(1, Ordering::SeqCst) + 1;
-            progress(Progress::PageEncoded { done: n, total });
-            Ok(page)
+                layout::crop_with_padding(&img, ox, oy, w, h)
+            }
+            None => img,
         })
-        .collect::<Result<_>>()?;
+    };
+
+    let encoded_count = AtomicUsize::new(0);
+    let encode = |img: &image::RgbImage, pdf_options: &PdfOptions| -> Result<pdf::EncodedPage> {
+        let page = pdf::encode_page(img, pdf_options)?;
+        let n = encoded_count.fetch_add(1, Ordering::SeqCst) + 1;
+        progress(Progress::PageEncoded { done: n, total });
+        Ok(page)
+    };
+
+    let mut pdf_options = options.pdf.clone();
+    let encoded: Vec<pdf::EncodedPage> = match &options.sharpen {
+        None => pages
+            .par_iter()
+            .zip(origins.par_iter())
+            .map(|(p, &o)| encode(&crop_page(p, o)?, &pdf_options))
+            .collect::<Result<_>>()?,
+        Some(sharpen_options) => {
+            // ---- 6: AI 鮮明化 (切り出した後のページだけを処理する) ----
+            let cropped_dir = work_dir.join("cropped");
+            let sharp_dir = work_dir.join("sharpened");
+            for d in [&cropped_dir, &sharp_dir] {
+                if d.exists() {
+                    std::fs::remove_dir_all(d)?;
+                }
+                std::fs::create_dir_all(d)?;
+            }
+            pages
+                .par_iter()
+                .zip(origins.par_iter())
+                .enumerate()
+                .try_for_each(|(i, (p, &o))| -> Result<()> { save_png_fast(&crop_page(p, o)?, &cropped_dir.join(format!("page_{i:05}.png"))) })?;
+
+            sharpen::upscale_dir(&cropped_dir, &sharp_dir, sharpen_options, &|done| {
+                progress(Progress::PageSharpened { done, total })
+            })?;
+
+            let scale = sharpen_options.output_scale.clamp(1.0, 4.0);
+            pdf_options.dpi *= scale;
+            (0..pages.len())
+                .into_par_iter()
+                .map(|i| -> Result<_> {
+                    let name = format!("page_{i:05}.png");
+                    let sharp = image::open(sharp_dir.join(&name))?.to_rgb8();
+                    let base = image::image_dimensions(cropped_dir.join(&name))?;
+                    let w = ((base.0 as f64 * scale).round() as u32).max(1);
+                    let h = ((base.1 as f64 * scale).round() as u32).max(1);
+                    let img = if (w, h) == sharp.dimensions() {
+                        sharp
+                    } else {
+                        image::imageops::resize(&sharp, w, h, image::imageops::FilterType::Lanczos3)
+                    };
+                    encode(&img, &pdf_options)
+                })
+                .collect::<Result<_>>()?
+        }
+    };
 
     if let Some(parent) = output_pdf.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
-    pdf::write_pdf(&encoded, output_pdf, &options.pdf)?;
+    pdf::write_pdf(&encoded, output_pdf, &pdf_options)?;
     progress(Progress::Finished {
         output: output_pdf.to_path_buf(),
     });
 
-    let output_size_px = out_size.unwrap_or_else(|| pages.first().map(|p| p.2).unwrap_or_default());
+    let output_size_px = encoded.first().map(|p| (p.width, p.height)).unwrap_or_default();
     Ok(ConvertReport {
         pages: pages.into_iter().map(|p| p.0).collect(),
         output_size_px,

@@ -31,9 +31,30 @@ impl Default for IlluminationOptions {
 }
 
 /// 背景 (紙の明るさ) を割り算して、照明ムラと影を取り除く。
+/// 色ごとに背景を推定するので、黄ばんだ紙や電球色の照明も白い紙に揃う。
 pub fn normalize_illumination(img: &RgbImage, options: &IlluminationOptions) -> RgbImage {
-    let gray = imgutil::to_gray(img);
-    let (small, _) = imgutil::shrink_to_max_side(&gray, options.analysis_max_size);
+    let bg: Vec<GrayImage> = (0..3).map(|c| estimate_background(&channel(img, c), options)).collect();
+
+    let wp = options.white_point.max(1) as f32;
+    let mut out = RgbImage::new(img.width(), img.height());
+    for (i, (o, p)) in out.pixels_mut().zip(img.pixels()).enumerate() {
+        for c in 0..3 {
+            let b = (bg[c].as_raw()[i] as f32).max(16.0);
+            // 紙 = 255 になるよう割り算し、さらに white_point 以上を白に飛ばす
+            let v = p[c] as f32 * 255.0 / b;
+            o[c] = (v * 255.0 / wp).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
+fn channel(img: &RgbImage, c: usize) -> GrayImage {
+    GrayImage::from_raw(img.width(), img.height(), img.pixels().map(|p| p[c]).collect()).unwrap()
+}
+
+// 1 チャンネル分の背景 (紙の明るさ) を、元の大きさで推定する
+fn estimate_background(ch: &GrayImage, options: &IlluminationOptions) -> GrayImage {
+    let (small, _) = imgutil::shrink_to_max_side(ch, options.analysis_max_size);
     let long = small.width().max(small.height()) as f64;
 
     // 文字 (暗い) を最大値フィルタで消し、紙の明るさだけを残す
@@ -46,19 +67,7 @@ pub fn normalize_illumination(img: &RgbImage, options: &IlluminationOptions) -> 
     imgutil::gaussian_blur_f32(&mut bgf, sw, sh, long * options.smooth_ratio);
     let bg_small = GrayImage::from_raw(sw as u32, sh as u32, bgf.iter().map(|&v| v.round().clamp(1.0, 255.0) as u8).collect()).unwrap();
 
-    let bg = imageops::resize(&bg_small, img.width(), img.height(), imageops::FilterType::Triangle);
-
-    let wp = options.white_point.max(1) as f32;
-    let mut out = RgbImage::new(img.width(), img.height());
-    for ((o, p), b) in out.pixels_mut().zip(img.pixels()).zip(bg.pixels()) {
-        let b = (b[0] as f32).max(16.0);
-        for c in 0..3 {
-            // 紙 = 255 になるよう割り算し、さらに white_point 以上を白に飛ばす
-            let v = p[c] as f32 * 255.0 / b;
-            o[c] = (v * 255.0 / wp).round().clamp(0.0, 255.0) as u8;
-        }
-    }
-    out
+    imageops::resize(&bg_small, ch.width(), ch.height(), imageops::FilterType::Triangle)
 }
 
 #[cfg(test)]
@@ -85,5 +94,12 @@ mod tests {
         assert!(out.get_pixel(570, 100)[0] > 240);
         // 文字は暗いまま
         assert!(out.get_pixel(110, 310)[0] < 80, "{:?}", out.get_pixel(110, 310));
+    }
+
+    #[test]
+    fn yellowish_paper_becomes_white() {
+        let img = RgbImage::from_pixel(400, 600, Rgb([240, 225, 190]));
+        let out = normalize_illumination(&img, &IlluminationOptions::default());
+        assert_eq!(*out.get_pixel(200, 300), Rgb([255, 255, 255]));
     }
 }
