@@ -1,4 +1,6 @@
-# macOS 対応 仕様案
+# macOS 対応 仕様案 (C# 版の移植案)
+
+> **この案は採用しない。** Mac 版は Tauri で作り直す方針になった。`docs/mac_tauri_app_spec.md` を参照。歪み補正と ScanTailor 参考の前処理の検討内容は、そちらに引き継いだ。
 
 対象: Apple Silicon の MacBook Pro (ユニファイドメモリ 100GB 以上)、macOS 14 以降。Intel Mac は対象外。
 
