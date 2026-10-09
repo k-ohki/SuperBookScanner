@@ -11,6 +11,7 @@ const isWindows = navigator.userAgent.includes("Windows");
 type ExportState =
   | { phase: "idle" }
   | { phase: "running"; label: string; fraction: number }
+  // output はアプリでは PDF のパス、ブラウザでは本の名前 (ダウンロード用)
   | { phase: "done"; output: string }
   | { phase: "error"; message: string };
 
@@ -25,6 +26,11 @@ export default function App() {
   const [previewing, setPreviewing] = useState(false);
   const [sharpenPath, setSharpenPath] = useState<string | null>(null);
   const [exportState, setExportState] = useState<ExportState>({ phase: "idle" });
+  // ブラウザ (iPad など) から使うとき: 本を選ぶ画面、写真の送信状況
+  const [bookPicker, setBookPicker] = useState(api.isRemote);
+  const [uploading, setUploading] = useState<string | null>(null);
+  // アプリ: iPad から使う設定の画面
+  const [remotePanel, setRemotePanel] = useState(false);
 
   useEffect(() => {
     api.sharpenAvailable().then(setSharpenPath);
@@ -51,8 +57,9 @@ export default function App() {
     });
   }, [loadFolder]);
 
-  // フォルダのドラッグ & ドロップ
+  // フォルダのドラッグ & ドロップ (アプリだけ)
   useEffect(() => {
+    if (api.isRemote) return;
     const unlisten = getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "drop" && e.payload.paths.length > 0) loadFolder(e.payload.paths[0]);
     });
@@ -126,11 +133,29 @@ export default function App() {
     if (typeof path === "string") loadFolder(path);
   };
 
+  // ブラウザ: 写真を本に追加して、開き直す
+  const addPhotos = async (files: FileList | null) => {
+    if (!folder || !files || files.length === 0) return;
+    try {
+      await api.uploadPhotos(folder.name, files, (done, total) => setUploading(`写真を送信中 ${done} / ${total}`));
+      await loadFolder(folder.path);
+    } catch (e) {
+      alert(String(e));
+    } finally {
+      setUploading(null);
+    }
+  };
+
   const startExport = async () => {
     if (!folder) return;
-    const parent = folder.path.replace(/[/\\][^/\\]*$/, "");
-    const output = await save({ defaultPath: `${parent}/${folder.name}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
-    if (!output) return;
+    // アプリでは保存先を選ぶ。ブラウザでは Mac のライブラリに <本の名前>.pdf で保存する
+    let output = "";
+    if (!api.isRemote) {
+      const parent = folder.path.replace(/[/\\][^/\\]*$/, "");
+      const chosen = await save({ defaultPath: `${parent}/${folder.name}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
+      if (!chosen) return;
+      output = chosen;
+    }
 
     setExportState({ phase: "running", label: "準備中", fraction: 0 });
     const unlisten = await api.onProgress((p: Progress) => {
@@ -139,7 +164,8 @@ export default function App() {
       if (p.kind === "PageEncoded") setExportState({ phase: "running", label: `PDF 作成 ${p.done} / ${p.total}`, fraction: (settings.sharpen ? 0.85 : 0.8) + (p.done / p.total) * 0.15 });
     });
     try {
-      await api.convert(folder.path, output, settings);
+      if (api.isRemote) output = await api.convertRemote(folder.path, settings);
+      else await api.convert(folder.path, output, settings);
       setExportState({ phase: "done", output });
     } catch (e) {
       setExportState(String(e).includes("cancelled") ? { phase: "idle" } : { phase: "error", message: String(e) });
@@ -155,15 +181,43 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">SuperBookScanner</div>
-        <button onClick={chooseFolder} disabled={running}>
-          フォルダを開く
-        </button>
+        {api.isRemote ? (
+          <button onClick={() => setBookPicker(true)} disabled={running || !!uploading}>
+            本を選ぶ
+          </button>
+        ) : (
+          <button onClick={chooseFolder} disabled={running}>
+            フォルダを開く
+          </button>
+        )}
+        {api.isRemote && folder && (
+          <label className={`button ${running || uploading ? "disabled" : ""}`}>
+            写真を追加
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              disabled={running || !!uploading}
+              onChange={(e) => {
+                addPhotos(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        )}
         {folder && (
           <div className="folder" title={folder.path}>
             {folder.name} · {folder.files.length} 枚
           </div>
         )}
+        {uploading && <div className="folder">{uploading}</div>}
         <div className="spacer" />
+        {!api.isRemote && (
+          <button onClick={() => setRemotePanel(true)} title="同じ Wi-Fi の iPad などのブラウザから使う">
+            iPad から使う
+          </button>
+        )}
         {folder && (
           <button className="primary" onClick={startExport} disabled={running || folder.files.length === 0}>
             PDF に書き出す
@@ -256,13 +310,23 @@ export default function App() {
         </aside>
 
         <main className="preview">
-          {!folder && (
+          {!folder && api.isRemote && (
+            <div className="empty">
+              <p>「本を選ぶ」で本を選ぶか、新しい本を作ってください。</p>
+            </div>
+          )}
+          {folder && folder.files.length === 0 && (
+            <div className="empty">
+              <p>{api.isRemote ? "「写真を追加」で、ページの写真を撮るか選んでください。送った順にページが並びます。" : "このフォルダには画像がありません。"}</p>
+            </div>
+          )}
+          {!folder && !api.isRemote && (
             <div className="empty">
               <p>ページ画像の入ったフォルダを、ここにドロップするか「フォルダを開く」で選んでください。</p>
               <p className="hint">1 フォルダ = 1 冊。ファイル名の順 (2 → 10 の順) にページを並べます。</p>
             </div>
           )}
-          {folder && (
+          {folder && folder.files.length > 0 && (
             <div className="compare">
               <figure>
                 <figcaption>{result ? "分割前の画像" : "元の画像"}</figcaption>
@@ -325,9 +389,19 @@ export default function App() {
             {exportState.phase === "done" && (
               <>
                 <p>書き出しました</p>
-                <p className="path">{exportState.output}</p>
+                {api.isRemote ? (
+                  <p className="path">Mac の書類 › SuperBookScanner › {exportState.output}.pdf</p>
+                ) : (
+                  <p className="path">{exportState.output}</p>
+                )}
                 <div className="buttons">
-                  <button onClick={() => revealItemInDir(exportState.output)}>{isWindows ? "エクスプローラーで表示" : "Finder で表示"}</button>
+                  {api.isRemote ? (
+                    <a className="button" href={api.downloadUrl(exportState.output)} target="_blank" rel="noreferrer">
+                      PDF を開く
+                    </a>
+                  ) : (
+                    <button onClick={() => revealItemInDir(exportState.output)}>{isWindows ? "エクスプローラーで表示" : "Finder で表示"}</button>
+                  )}
                   <button className="primary" onClick={() => setExportState({ phase: "idle" })}>
                     閉じる
                   </button>
@@ -344,6 +418,18 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {bookPicker && (
+        <BookPicker
+          canClose={!!folder}
+          onClose={() => setBookPicker(false)}
+          onOpen={(path) => {
+            setBookPicker(false);
+            loadFolder(path);
+          }}
+        />
+      )}
+      {remotePanel && <RemotePanel onClose={() => setRemotePanel(false)} />}
     </div>
   );
 }
@@ -493,5 +579,122 @@ function PageInfo({ pages }: { pages: PreviewPage[] }) {
         );
       })}
     </ul>
+  );
+}
+
+/// ブラウザ: Mac のライブラリの本を選ぶか、新しい本を作る
+function BookPicker(props: { canClose: boolean; onClose: () => void; onOpen: (path: string) => void }) {
+  const [books, setBooks] = useState<api.Book[] | null>(null);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.books().then(setBooks, (e) => setError(String(e)));
+  }, []);
+  const create = async () => {
+    try {
+      props.onOpen(await api.createBook(name));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  return (
+    <div className="overlay">
+      <div className="dialog books">
+        <h3>本を選ぶ</h3>
+        <form
+          className="new-book"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) create();
+          }}
+        >
+          <input type="text" placeholder="新しい本の名前" value={name} onChange={(e) => setName(e.target.value)} />
+          <button className="primary" type="submit" disabled={!name.trim()}>
+            作る
+          </button>
+        </form>
+        {error && <p className="error">{error}</p>}
+        <ul className="book-list">
+          {books?.map((b) => (
+            <li key={b.path}>
+              <button onClick={() => props.onOpen(b.path)}>
+                <span className="name">{b.name}</span>
+                <span className="hint">{b.images} 枚</span>
+              </button>
+              {b.pdf && (
+                <a className="button" href={api.downloadUrl(b.name)} target="_blank" rel="noreferrer">
+                  PDF
+                </a>
+              )}
+            </li>
+          ))}
+          {books?.length === 0 && <li className="hint">まだ本がありません。名前を入れて「作る」を押してください。</li>}
+        </ul>
+        {props.canClose && <button onClick={props.onClose}>閉じる</button>}
+      </div>
+    </div>
+  );
+}
+
+/// アプリ: 同じ Wi-Fi の iPad などのブラウザから使えるようにする
+function RemotePanel(props: { onClose: () => void }) {
+  const [info, setInfo] = useState<api.RemoteInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.remoteStatus().then(setInfo);
+  }, []);
+  const toggle = async (on: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (on) setInfo(await api.remoteStart());
+      else {
+        await api.remoteStop();
+        setInfo(null);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="overlay">
+      <div className="dialog remote">
+        <h3>iPad から使う</h3>
+        <Check label="同じ Wi-Fi のほかの機器から使えるようにする" value={!!info} disabled={busy} onChange={toggle} />
+        {error && <p className="error">{error}</p>}
+        {info && (
+          <>
+            {info.urls.length > 0 ? (
+              <>
+                <p>iPad のカメラでこの QR コードを読むか、Safari で次のアドレスを開いてください。</p>
+                <div className="qr" dangerouslySetInnerHTML={{ __html: info.qrSvg }} />
+                {info.urls.map((u) => (
+                  <p key={u} className="path">
+                    {u}
+                  </p>
+                ))}
+              </>
+            ) : (
+              <p className="error">ネットワークのアドレスが見つかりません。Wi-Fi につながっているか確認してください。</p>
+            )}
+            <p className="hint">
+              iPad から送った写真と書き出した PDF は、この {isWindows ? "PC" : "Mac"} の {info.library} に保存されます。合言葉はないので、同じ Wi-Fi
+              の誰でも使えます。オンの間は {isWindows ? "PC" : "Mac"} がスリープしません。
+            </p>
+            <div className="buttons">
+              <button onClick={() => revealItemInDir(info.library)}>{isWindows ? "エクスプローラーで表示" : "Finder で表示"}</button>
+            </div>
+          </>
+        )}
+        <div className="buttons">
+          <button className="primary" onClick={props.onClose}>
+            閉じる
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

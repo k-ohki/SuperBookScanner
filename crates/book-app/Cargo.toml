@@ -15,3 +15,14 @@ serde_json = "1"
 anyhow = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 base64 = "0.22"
+# iPad などから使う Web サーバー (remote.rs)
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["net", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+if-addrs = "0.13"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# iPad から使っている間、Mac がアプリを休ませない (App Nap) ようにする
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSString", "NSObject"] }
