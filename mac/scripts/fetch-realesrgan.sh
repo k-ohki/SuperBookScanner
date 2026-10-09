@@ -1,10 +1,10 @@
 #!/bin/sh
-# AI 鮮明化に使う realesrgan-ncnn-vulkan (公式リリース v0.2.5.0) を mac/third_party/realesrgan/ に取得する。
-# Windows では fetch-realesrgan.ps1 を使う。
+# AI 鮮明化に使う realesrgan-ncnn-vulkan (公式リリース v0.2.5.0) を third_party/realesrgan/ (リポジトリ直下) に取得する。
+# Linux の CLI でも使える。Windows では windows/scripts/fetch-realesrgan.ps1 を使う。
 # macOS 版は arm64 / x86_64 のユニバーサルバイナリで、Apple Silicon の GPU (Metal) で動く。
 set -eu
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 DEST=third_party/realesrgan
 BASE=https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0
 

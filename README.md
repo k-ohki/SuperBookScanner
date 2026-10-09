@@ -48,11 +48,18 @@ Windows 版は画面の表示に WebView2 を使います。Windows 11 には最
 
 ## ビルドとインストール
 
-どちらの OS でも、手順は同じです。
+Mac 版は `mac/`、Windows 版は `windows/` でビルドします (画像処理と画面は共通)。
 
 ```sh
 git clone https://github.com/k-ohki/SuperBookScanner.git
-cd SuperBookScanner/mac/app
+
+# Mac
+cd SuperBookScanner/mac
+npm ci
+npm run tauri build
+
+# Windows
+cd SuperBookScanner\windows
 npm ci
 npm run tauri build
 ```
@@ -61,17 +68,17 @@ npm run tauri build
 
 できあがるもの:
 
-- アプリ: `mac/target/release/bundle/macos/SuperBookScanner.app`
-- インストーラ: `mac/target/release/bundle/dmg/SuperBookScanner_<版>_aarch64.dmg`
+- アプリ: `target/release/bundle/macos/SuperBookScanner.app`
+- インストーラ: `target/release/bundle/dmg/SuperBookScanner_<版>_aarch64.dmg`
 
-`.app` を「アプリケーション」フォルダにコピーすれば使えます。写真の平面化モデル (`mac/models/uvdoc.onnx`) はアプリに同梱されます。
+`.app` を「アプリケーション」フォルダにコピーすれば使えます。写真の平面化モデル (`models/uvdoc.onnx`) はアプリに同梱されます。
 
 > 署名していないので、初回は Finder でアプリを右クリック →「開く」で起動してください。
 > DMG を作るときに `hdiutil: couldn't unmount ... Resource busy` で失敗したら、ビルド中にマウントされたディスクイメージ上でアプリを起動していないか確認してください。そのアプリを終了し、`/Volumes/dmg.*` を取り出してからビルドし直してください。
 
 ### Windows
 
-できあがるもの: インストーラ `mac\target\release\bundle\nsis\SuperBookScanner_<版>_x64-setup.exe`
+できあがるもの: インストーラ `target\release\bundle\nsis\SuperBookScanner_<版>_x64-setup.exe`
 
 インストーラを実行すると、ユーザーごとに (管理者権限なしで) `%LOCALAPPDATA%\SuperBookScanner` にインストールされ、スタートメニューに登録されます。写真の平面化モデルも同梱されます。
 
@@ -81,7 +88,7 @@ npm run tauri build
 
 ### AI 鮮明化を使う場合
 
-Real-ESRGAN (ncnn 版の `realesrgan-ncnn-vulkan`) は同梱していません。初回だけ次のスクリプトで取得してください。GitHub の [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) のリリース zip をダウンロードし、チェックサムを確かめてから `mac/third_party/realesrgan/` に置きます。
+Real-ESRGAN (ncnn 版の `realesrgan-ncnn-vulkan`) は同梱していません。初回だけ次のスクリプトで取得してください。GitHub の [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) のリリース zip をダウンロードし、チェックサムを確かめてから `third_party/realesrgan/` に置きます。
 
 ```sh
 # Mac
@@ -90,13 +97,13 @@ Real-ESRGAN (ncnn 版の `realesrgan-ncnn-vulkan`) は同梱していません�
 
 ```powershell
 # Windows (PowerShell)
-powershell -ExecutionPolicy Bypass -File mac\scripts\fetch-realesrgan.ps1
+powershell -ExecutionPolicy Bypass -File windows\scripts\fetch-realesrgan.ps1
 
 # インストールしたアプリで使う場合は、アプリの隣に置く
-powershell -ExecutionPolicy Bypass -File mac\scripts\fetch-realesrgan.ps1 -Dest "$env:LOCALAPPDATA\SuperBookScanner\realesrgan"
+powershell -ExecutionPolicy Bypass -File windows\scripts\fetch-realesrgan.ps1 -Dest "$env:LOCALAPPDATA\SuperBookScanner\realesrgan"
 ```
 
-このリポジトリでビルドしたアプリは、`mac/third_party/realesrgan/` に置いた実行ファイルを自動で見つけます。別の場所に置く場合は、環境変数 `SUPERBOOK_REALESRGAN` でその場所を指定してください。
+このリポジトリでビルドしたアプリは、`third_party/realesrgan/` に置いた実行ファイルを自動で見つけます。別の場所に置く場合は、環境変数 `SUPERBOOK_REALESRGAN` でその場所を指定してください。
 
 ## アプリの使い方
 
@@ -113,7 +120,7 @@ powershell -ExecutionPolicy Bypass -File mac\scripts\fetch-realesrgan.ps1 -Dest 
 アプリと同じ処理をターミナルから実行できます。たくさんのフォルダをまとめて変換するときに便利です。
 
 ```sh
-cd mac
+# リポジトリ直下で
 cargo build --release
 
 # 1 冊を PDF に (横向きに撮った写真なので左に 90° 回す)
@@ -151,8 +158,14 @@ heic (iPhone の写真) は OS の機能で読み込みます。Mac は標準の
 
 | パス | 内容 |
 |---|---|
-| [`mac/`](mac/) | アプリ・CLI・画像処理のソース一式 (Mac 版・Windows 版の両方。フォルダ名は最初に Mac 版から作った名残)。開発者向けの説明は [`mac/README.md`](mac/README.md) |
-| [`docs/`](docs/) | 仕様 ([`mac_tauri_app_spec.md`](docs/mac_tauri_app_spec.md)) |
+| [`crates/book-core/`](crates/book-core/) | 画像処理 (共通) |
+| [`crates/book-cli/`](crates/book-cli/) | コマンドライン版 `superbook` (共通) |
+| [`crates/book-app/`](crates/book-app/) | アプリの中身 (画面とのやりとり。共通) |
+| [`ui/`](ui/) | アプリの画面 (React。共通) |
+| [`models/`](models/) | 写真の平面化モデル UVDoc |
+| [`mac/`](mac/) | **Mac 版**: アプリの設定・アイコン、Real-ESRGAN 取得スクリプト (`.sh`) |
+| [`windows/`](windows/) | **Windows 版**: アプリ・インストーラの設定・アイコン、Real-ESRGAN 取得スクリプト (`.ps1`) |
+| [`docs/`](docs/) | [開発者向けの説明](docs/development.md)、[仕様](docs/spec.md) |
 | [`.github/workflows/`](.github/workflows/) | CI (macOS・Windows・Linux でのテスト、Mac アプリのビルド、Windows インストーラの作成) |
 
 ## フォーク元について
@@ -165,7 +178,7 @@ heic (iPhone の写真) は OS の機能で読み込みます。Mac は標準の
 
 同梱・利用している主なもの:
 
-- [UVDoc](https://github.com/tanguymagne/UVDoc) (MIT): 写真の平面化モデル。ONNX に変換して `mac/models/uvdoc.onnx` として同梱
+- [UVDoc](https://github.com/tanguymagne/UVDoc) (MIT): 写真の平面化モデル。ONNX に変換して `models/uvdoc.onnx` として同梱
 - [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (BSD-3-Clause): AI 鮮明化。同梱せず、利用者がスクリプトで取得する
 - [tract](https://github.com/sonos/tract)、[image](https://github.com/image-rs/image)、[lopdf](https://github.com/J-F-Liu/lopdf)、[Tauri](https://tauri.app/) ほか (各ライセンスに従う)
 

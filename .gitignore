@@ -1,3 +1,11 @@
+# ビルド結果
+/target
+node_modules/
+/ui/dist
+
+# 取得スクリプトで入れる外部プログラム (Real-ESRGAN)
+/third_party
+
 # macOS
 .DS_Store
 
