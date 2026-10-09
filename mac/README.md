@@ -1,74 +1,84 @@
-# SuperBookScanner for Mac
+# SuperBookScanner for Mac (開発者向け)
 
-本のページ画像 (スキャン・スマホ撮影) のフォルダから、読みやすい PDF を作るツール。
-仕様は [`../docs/mac_tauri_app_spec.md`](../docs/mac_tauri_app_spec.md)。
-
-現在は M2 まで (画像処理コア + CLI + AI 鮮明化)。Tauri アプリ (M3) はこれから。
+使い方はリポジトリ直下の [`README.md`](../README.md)、仕様は [`../docs/mac_tauri_app_spec.md`](../docs/mac_tauri_app_spec.md) を参照。
 
 ## 構成
 
 | パス | 内容 |
 |---|---|
-| `crates/book-core` | 画像処理パイプライン (純 Rust、OpenCV 不要) |
+| `crates/book-core` | 画像処理パイプライン (純 Rust、OpenCV 不要)。UI に依存しないライブラリ |
 | `crates/book-cli` | コマンドライン版 `superbook` |
+| `app/src` | 画面 (TypeScript + React、Vite) |
+| `app/src-tauri` | Tauri 2 のバックエンド。book-core を呼び、進捗をイベントで画面に送る |
+| `models/uvdoc.onnx` | 写真の平面化モデル。`.app` の `Resources/models/` に同梱される (`tauri.conf.json` の `bundle.resources`) |
+| `scripts/fetch-realesrgan.sh` | Real-ESRGAN (ncnn 版) を `third_party/realesrgan/` に取得する。`third_party/` は git 管理外 |
 
-## 処理の流れ
+### book-core のモジュール
 
-1. 入力: フォルダ直下の画像をファイル名の自然順 (2 < 10) に並べ、EXIF の回転を反映し、A4 300dpi 相当の大きさに揃える
-2. 傾き補正: 文字の投影が最も鋭くなる角度 (±5°) を探して回す。縦書きにも対応
-3. 歪み補正: ノド付近の行の湾曲を直す (C# 版 PR #1 `BookDewarp.cs` の移植)
-4. 影・照明ムラの除去: 紙の明るさを推定して割り算し、紙を白に揃える
-5. 余白の統一: 本文の外側を白で埋め、全ページを同じ大きさ・同じ余白で切り出す
-6. AI 鮮明化 (`--sharpen` のときだけ): Real-ESRGAN (ncnn 版) で 4 倍にしてから 2 倍 (600dpi 相当) に縮小する。Apple Silicon の GPU で動く
-7. PDF 出力: JPEG をそのまま埋め込む。グレースケールのページは自動でグレーの JPEG にする
+| モジュール | 内容 |
+|---|---|
+| `input` | 画像の列挙 (自然順)、EXIF 回転、heic の読み込み (`sips`) |
+| `unwarp` | UVDoc (ONNX、tract で CPU 推論) による写真の平面化。紙の範囲・台形・反り・背景 |
+| `split` | 見開き分割。ノドの影と本文の空白列から分割位置を探す |
+| `deskew` | 傾き補正。投影プロファイルの分散が最大になる角度 (±5°) |
+| `dewarp` | ノドの湾曲の補正。行をたどり多項式で近似し、変位場で展開 (C# 版 `BookDewarp.cs` の移植) |
+| `illumination` | 影・照明ムラの除去。紙の明るさを推定して割り算する |
+| `layout` | 本文の範囲の検出と、全ページ共通の大きさ・余白での切り出し |
+| `sharpen` | Real-ESRGAN を外部プロセスとして呼ぶ AI 鮮明化 |
+| `pdf` | JPEG を再圧縮せずに埋め込む PDF 出力 (lopdf)。見開き表示・右綴じの設定 |
+| `project` | 画像ごとの手動調整。入力フォルダの `superbook.json` に保存 |
+| `pipeline` | 上記をつないだ変換処理。ページ単位で並列 (rayon)、進捗通知と中止に対応 |
 
-## 使い方
+## ビルド
 
 ```sh
-# Rust のインストール (未導入の場合)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
+# コアと CLI
 cd mac
-cargo build --release
+cargo build --release -p book-cli          # → target/release/superbook
 
-# 1 冊 (画像フォルダ 1 つ) を PDF に
-./target/release/superbook convert ~/Scans/book1 -o ~/Books/book1.pdf
+# アプリ (.app と .dmg)
+cd mac/app
+npm ci
+npm run tauri build                        # → target/release/bundle/{macos,dmg}/
+npm run tauri build -- --bundles app       # .app だけ
 
-# AI 鮮明化も行う (初回だけ realesrgan-ncnn-vulkan を取得する)
-./scripts/fetch-realesrgan.sh
-./target/release/superbook convert ~/Scans/book1 -o ~/Books/book1.pdf --sharpen
-
-# サブフォルダをまとめて (画像を含むフォルダごとに 1 冊)
-./target/release/superbook convert ~/Scans -o ~/Books --recursive
-
-# 主なオプション
-#   --rotate 270          読み込み後に回す角度 (横向きに撮った写真など。時計回り)
-#   --no-unwarp           写真の平面化 (紙の範囲・台形・反り・背景) をしない (平らなスキャンなど)
-#   --no-project          アプリで保存したページごとの調整 (入力フォルダの superbook.json) を使わない
-#   --rtl                 右綴じ (縦書きの本)
-#   --sharpen             AI 鮮明化 (--sharpen-scale 2 で 600dpi 相当、--sharpen-model で モデル変更)
-#   --no-dewarp           歪み補正をしない (平らなスキャンなど)
-#   --margin 0.05         余白の大きさ
-#   --quality 85          JPEG の品質
-#   --work-dir DIR        中間画像と report.json (各ページの傾き・歪み補正の結果) を残す
-./target/release/superbook convert --help
-
-# 写真の平面化だけを 1 枚で試す
-./target/release/superbook unwarp photo.jpg out.png --rotate 270
-
-# 歪み補正だけを 1 枚で試す (--debug で検出した行を描いた画像を出力)
-./target/release/superbook dewarp page.jpg out.png --debug lines.png
+# 開発中 (ホットリロード)
+npm run tauri dev
 ```
-
-AI 鮮明化の実行ファイルは、`SUPERBOOK_REALESRGAN` 環境変数 → 実行ファイルと同じフォルダ → .app の `Contents/Resources/realesrgan/` → `mac/third_party/realesrgan/` (ビルドした .app からも見つかる) → PATH の順に探す (`--realesrgan` で直接指定も可)。
-低い解像度 (`--page-long-side` を小さくした場合など) で鮮明化すると、小さな文字が別の字の形に変わることがあるので注意。
-
-写真の平面化には学習済みモデル UVDoc (MIT, https://github.com/tanguymagne/UVDoc) を ONNX に変換した `mac/models/uvdoc.onnx` を使う (Rust だけの ONNX ランタイム tract で CPU 推論、1 枚 1 秒ほど)。`SUPERBOOK_UVDOC` 環境変数 → 実行ファイルの隣 → .app の Resources → `mac/models/` の順に探す。見つからなければ平面化をとばす。
-
-対応形式: jpg / png / tif / webp / bmp / gif / heic (heic は macOS の `sips` で変換)。`_` で始まるファイル・フォルダは無視する。
 
 ## テスト
 
 ```sh
-cargo test
+cd mac
+cargo fmt --all --check
+cargo test --release -p book-core -p book-cli
 ```
+
+CI (`.github/workflows/mac-core.yml`) は、コアと CLI のテストを macOS と Linux で実行し、アプリのビルドを macOS で確認する。
+
+## 外部ファイルの探し方
+
+- **UVDoc モデル**: 環境変数 `SUPERBOOK_UVDOC` → 実行ファイルの隣 → `.app` の `Resources/models/` → `mac/models/`。見つからなければ平面化をとばす
+- **Real-ESRGAN**: 環境変数 `SUPERBOOK_REALESRGAN` → 実行ファイルと同じフォルダ (とその下の `realesrgan/`) → `.app` の `Contents/Resources/realesrgan/` → 上位フォルダの `third_party/realesrgan/` (ビルドした `.app` からも `mac/third_party/` が見つかる) → PATH。CLI では `--realesrgan` で直接指定もできる
+
+## デバッグ用の CLI コマンド
+
+```sh
+# 中間画像と各ページの補正結果 (report.json) を残す
+./target/release/superbook convert photos/ -o out.pdf --work-dir work
+
+# 写真の平面化だけを 1 枚で試す
+./target/release/superbook unwarp photo.jpg out.png --rotate 270
+
+# 見開き分割だけを試す
+./target/release/superbook split spread.jpg out
+
+# 歪み補正だけを試す (--debug で検出した行を描いた画像も出す)
+./target/release/superbook dewarp page.jpg out.png --debug lines.png
+```
+
+## 注意点
+
+- 低い解像度 (`--page-long-side` を小さくした場合など) で AI 鮮明化すると、小さな文字が別の字の形に変わることがある
+- AI 鮮明化は GPU (Vulkan → MoltenVK → Metal) をほぼ使い切るので、処理中は画面が重くなる
+- `npm run tauri build` で DMG を作るとき、作業用のディスクイメージ上でアプリを起動したままだと、取り出せずに失敗する (`Resource busy`)
