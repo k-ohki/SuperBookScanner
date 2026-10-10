@@ -69,7 +69,7 @@ enum Command {
         /// 鮮明化後の解像度の倍率 (1〜4。2 なら 600dpi 相当)
         #[arg(long, default_value_t = 2.0)]
         sharpen_scale: f64,
-        /// 鮮明化のモデル (realesrgan-x4plus / realesrnet-x4plus など)
+        /// 鮮明化のモデル (realesrgan-x4plus / realesrgan-x4plus-anime)
         #[arg(long, default_value = "realesrgan-x4plus")]
         sharpen_model: String,
         /// realesrgan-ncnn-vulkan の実行ファイル (省略時は自動で探す)

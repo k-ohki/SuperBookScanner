@@ -31,6 +31,8 @@ export default function App() {
   const [uploading, setUploading] = useState<string | null>(null);
   // アプリ: iPad から使う設定の画面
   const [remotePanel, setRemotePanel] = useState(false);
+  // アプリ: PDF の保存先フォルダ (空なら本のフォルダと同じ場所)
+  const [outputDir, setOutputDir] = useState(api.loadOutputDir);
 
   useEffect(() => {
     api.sharpenAvailable().then(setSharpenPath);
@@ -91,9 +93,11 @@ export default function App() {
     };
   }, [folder, settings.rotate]);
 
-  // 選んだ画像のプレビュー (設定を変えたら少し待ってから作り直す)
+  // 選んだ画像のプレビュー (設定を変えたら少し待ってから作り直す)。
+  // 本文の範囲 (content) は画像の補正に影響しないので、プレビューには渡さず、枠を動かしても作り直さない
   const ovr: PageOverride = overrides[selected] ?? {};
-  const ovrKey = JSON.stringify(ovr);
+  const { content: _content, ...ovrForPreview } = ovr;
+  const ovrKey = JSON.stringify(ovrForPreview);
   const previewSeq = useRef(0);
   useEffect(() => {
     if (!folder || folder.files.length === 0) return;
@@ -151,8 +155,18 @@ export default function App() {
     // アプリでは保存先を選ぶ。ブラウザでは Mac のライブラリに <本の名前>.pdf で保存する
     let output = "";
     if (!api.isRemote) {
-      const parent = folder.path.replace(/[/\\][^/\\]*$/, "");
-      const chosen = await save({ defaultPath: `${parent}/${folder.name}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
+      // 保存先フォルダがまだなければ作る (指定がないか作れなければ、本のフォルダの隣)
+      let dir = folder.path.replace(/[/\\][^/\\]*$/, "");
+      if (outputDir) {
+        try {
+          await api.ensureDir(outputDir);
+          dir = outputDir;
+        } catch {
+          /* 本のフォルダの隣にする */
+        }
+      }
+      const sep = isWindows ? "\\" : "/";
+      const chosen = await save({ defaultPath: `${dir}${sep}${folder.name}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
       if (!chosen) return;
       output = chosen;
     }
@@ -174,7 +188,17 @@ export default function App() {
     }
   };
 
+  const chooseOutputDir = async () => {
+    const path = await open({ directory: true, multiple: false, title: "PDF の保存先を選ぶ", defaultPath: outputDir || undefined });
+    if (typeof path !== "string") return;
+    setOutputDir(path);
+    api.saveOutputDir(path);
+  };
+
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setSettings((s) => ({ ...s, [key]: value }));
+  // プレビューの画像を、はみ出さずに全体が見える大きさで並べるため、置き場所の大きさを測る
+  const stageArea = useElementSize();
+  const pagesArea = useElementSize();
   const running = exportState.phase === "running";
 
   return (
@@ -315,6 +339,17 @@ export default function App() {
             画質 {settings.quality}
             <input type="range" min={50} max={100} step={1} value={settings.quality} onChange={(e) => set("quality", Number(e.target.value))} />
           </label>
+          {!api.isRemote && (
+            <>
+              <div className="row">
+                保存先
+                <button onClick={chooseOutputDir}>変更</button>
+              </div>
+              <p className="hint path" title={outputDir}>
+                {outputDir || "本のフォルダと同じ場所"}
+              </p>
+            </>
+          )}
         </aside>
 
         <main className="preview">
@@ -339,7 +374,14 @@ export default function App() {
               <figure>
                 <figcaption>{result ? "分割前の画像" : "元の画像"}</figcaption>
                 {result ? (
-                  <StageView preview={result} split={ovr.split} onSplit={(at) => setOvr({ split: { at } })} />
+                  <div className="fit-area" ref={stageArea.ref}>
+                    <StageView
+                      preview={result}
+                      size={fit(result.stageWidth, result.stageHeight, stageArea.size.w, stageArea.size.h)}
+                      split={ovr.split}
+                      onSplit={(at) => setOvr({ split: { at } })}
+                    />
+                  </div>
                 ) : thumbs[folder.files[selected]] ? (
                   <img src={thumbs[folder.files[selected]]} alt="" />
                 ) : (
@@ -351,13 +393,14 @@ export default function App() {
                   補正後 {previewing && "(処理中…)"} {ovr.skip && "· 書き出さない"}
                 </figcaption>
                 {previewError && <p className="error">{previewError}</p>}
-                <div className="pages">
+                <div className="pages fit-area" ref={pagesArea.ref}>
                   {result?.pages.map((p, i) => (
                     <PageView
                       key={i}
                       page={p}
+                      size={fit(p.width, p.height, (pagesArea.size.w - PAGE_GAP * (result.pages.length - 1)) / result.pages.length, pagesArea.size.h)}
                       showBox={settings.crop}
-                      manual={!!ovr.content?.[String(i)]}
+                      manual={ovr.content?.[String(i)] ?? null}
                       onBox={(r) => setContent(i, r)}
                       onReset={() => setContent(i, null)}
                     />
@@ -467,6 +510,30 @@ function Tri(props: { label: string; value: boolean | null | undefined; onChange
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
+// 補正後のページを並べるすき間 (px。styles.css の .pages の gap と同じ)
+const PAGE_GAP = 8;
+
+type Size = { width: number; height: number };
+
+// w × h の画像を、縦横比を保って box に収まる大きさにする
+function fit(w: number, h: number, boxW: number, boxH: number): Size {
+  const s = Math.max(0, Math.min(boxW / w, boxH / h));
+  return { width: Math.floor(w * s), height: Math.floor(h * s) };
+}
+
+// 要素の中身の大きさ (ウィンドウの大きさを変えたら測り直す)。ref は要素に付ける
+function useElementSize() {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setSize({ w: e.contentRect.width, h: e.contentRect.height }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return { ref: setEl, size };
+}
+
 // 要素内のポインタ位置 (0..1)
 function relPos(el: HTMLElement, e: { clientX: number; clientY: number }) {
   const r = el.getBoundingClientRect();
@@ -474,7 +541,7 @@ function relPos(el: HTMLElement, e: { clientX: number; clientY: number }) {
 }
 
 // 平面化した見開き。縦線 (分割位置) をドラッグで動かせる
-function StageView({ preview, split, onSplit }: { preview: Preview; split: PageOverride["split"]; onSplit: (at: number) => void }) {
+function StageView({ preview, size, split, onSplit }: { preview: Preview; size: Size; split: PageOverride["split"]; onSplit: (at: number) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<number | null>(null);
   const gutter = preview.pages[0]?.report.split.gutter_x;
@@ -495,7 +562,7 @@ function StageView({ preview, split, onSplit }: { preview: Preview; split: PageO
   };
 
   return (
-    <div ref={ref} className={`stage ${canSplit ? "splittable" : ""}`} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
+    <div ref={ref} className={`stage ${canSplit ? "splittable" : ""}`} style={size} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}>
       <img src={preview.stage} alt="" draggable={false} />
       {at != null && <div className="split-line" style={{ left: `${at * 100}%` }} />}
     </div>
@@ -504,15 +571,16 @@ function StageView({ preview, split, onSplit }: { preview: Preview; split: PageO
 
 type Handle = "move" | "nw" | "ne" | "sw" | "se";
 
-// 補正後のページ。本文の範囲 (余白をそろえる基準) を枠で示し、ドラッグで直せる
-function PageView(props: { page: PreviewPage; showBox: boolean; manual: boolean; onBox: (r: RectF) => void; onReset: () => void }) {
+// 補正後のページ。本文の範囲 (余白をそろえる基準) を枠で示し、ドラッグで直せる。
+// プレビューは手動の範囲なしで作るので、report の範囲はいつも自動のもの。手動の範囲は manual で受け取る
+function PageView(props: { page: PreviewPage; size: Size; showBox: boolean; manual: RectF | null; onBox: (r: RectF) => void; onReset: () => void }) {
   const { page } = props;
   const ref = useRef<HTMLDivElement>(null);
   const b = page.report.content_box;
   const auto: RectF | null = b ? { x: b.x / page.width, y: b.y / page.height, w: b.w / page.width, h: b.h / page.height } : null;
   const [drag, setDrag] = useState<{ handle: Handle; start: { x: number; y: number }; rect: RectF } | null>(null);
   const [live, setLive] = useState<RectF | null>(null);
-  const rect = live ?? auto;
+  const rect = live ?? props.manual ?? auto;
 
   const begin = (handle: Handle) => (e: React.PointerEvent) => {
     if (!rect || !ref.current) return;
@@ -542,12 +610,11 @@ function PageView(props: { page: PreviewPage; showBox: boolean; manual: boolean;
   const end = () => {
     if (drag && live) props.onBox(live);
     setDrag(null);
+    setLive(null);
   };
-  // 新しいプレビューが届いたら、ドラッグ中の仮の枠を捨てる
-  useEffect(() => setLive(null), [page]);
 
   return (
-    <div className="page" ref={ref} onPointerMove={move} onPointerUp={end}>
+    <div className="page" ref={ref} style={props.size} onPointerMove={move} onPointerUp={end}>
       <img src={page.image} alt="" draggable={false} />
       {props.showBox && rect && (
         <div
