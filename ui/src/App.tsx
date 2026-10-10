@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import * as api from "./api";
+import BatchPanel from "./Batch";
 import type { FolderInfo, PageOverride, Preview, PreviewPage, Progress, RectF, Settings } from "./api";
 
 // Windows と macOS で表示を変える箇所 (ファイラーの名前、スクリプト名) のため
@@ -31,6 +32,15 @@ export default function App() {
   const [uploading, setUploading] = useState<string | null>(null);
   // アプリ: iPad から使う設定の画面
   const [remotePanel, setRemotePanel] = useState(false);
+  // まとめて書き出す画面。incoming はそこへ追加するフォルダ (ドロップされたものなど)
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchIncoming, setBatchIncoming] = useState<{ paths: string[]; seq: number } | null>(null);
+  const batchOpenRef = useRef(false);
+  batchOpenRef.current = batchOpen;
+  const openBatch = (paths: string[]) => {
+    setBatchIncoming((b) => ({ paths, seq: (b?.seq ?? 0) + 1 }));
+    setBatchOpen(true);
+  };
 
   useEffect(() => {
     api.sharpenAvailable().then(setSharpenPath);
@@ -50,23 +60,46 @@ export default function App() {
     }
   }, []);
 
+  // フォルダを開く。画像がなく、その下に本のフォルダがあれば、まとめて書き出す画面に並べる
+  const openPath = useCallback(
+    async (path: string) => {
+      try {
+        const info = await api.openFolder(path);
+        if (info.files.length === 0 && (await api.findBooks([path])).length > 0) {
+          setBatchIncoming((b) => ({ paths: [path], seq: (b?.seq ?? 0) + 1 }));
+          setBatchOpen(true);
+          return;
+        }
+      } catch {
+        /* 開けないときは loadFolder がエラーを出す */
+      }
+      loadFolder(path);
+    },
+    [loadFolder],
+  );
+
   // 起動時にフォルダが渡されていれば開く
   useEffect(() => {
     api.initialFolder().then((p) => {
-      if (p) loadFolder(p);
+      if (p) openPath(p);
     });
-  }, [loadFolder]);
+  }, [openPath]);
 
-  // フォルダのドラッグ & ドロップ (アプリだけ)
+  // フォルダのドラッグ & ドロップ (アプリだけ)。2 つ以上なら、まとめて書き出す画面に並べる
   useEffect(() => {
     if (api.isRemote) return;
     const unlisten = getCurrentWebview().onDragDropEvent((e) => {
-      if (e.payload.type === "drop" && e.payload.paths.length > 0) loadFolder(e.payload.paths[0]);
+      if (e.payload.type !== "drop" || e.payload.paths.length === 0) return;
+      const paths = e.payload.paths;
+      if (batchOpenRef.current || paths.length > 1) {
+        setBatchIncoming((b) => ({ paths, seq: (b?.seq ?? 0) + 1 }));
+        setBatchOpen(true);
+      } else openPath(paths[0]);
     });
     return () => {
       unlisten.then((f) => f());
     };
-  }, [loadFolder]);
+  }, [openPath]);
 
   // サムネイル (回転を変えたら作り直す)。3 枚ずつ並行して作る
   useEffect(() => {
@@ -130,7 +163,7 @@ export default function App() {
 
   const chooseFolder = async () => {
     const path = await open({ directory: true, multiple: false, title: "ページ画像のフォルダを選ぶ" });
-    if (typeof path === "string") loadFolder(path);
+    if (typeof path === "string") openPath(path);
   };
 
   // ブラウザ: 写真を本に追加して、開き直す
@@ -159,9 +192,8 @@ export default function App() {
 
     setExportState({ phase: "running", label: "準備中", fraction: 0 });
     const unlisten = await api.onProgress((p: Progress) => {
-      if (p.kind === "PageProcessed") setExportState({ phase: "running", label: `補正 ${p.done} / ${p.total}`, fraction: (p.done / p.total) * (settings.sharpen ? 0.4 : 0.8) });
-      if (p.kind === "PageSharpened") setExportState({ phase: "running", label: `AI 鮮明化 ${p.done} / ${p.total}`, fraction: 0.4 + (p.done / p.total) * 0.45 });
-      if (p.kind === "PageEncoded") setExportState({ phase: "running", label: `PDF 作成 ${p.done} / ${p.total}`, fraction: (settings.sharpen ? 0.85 : 0.8) + (p.done / p.total) * 0.15 });
+      const d = api.describeProgress(p, settings.sharpen);
+      if (d) setExportState({ phase: "running", ...d });
     });
     try {
       if (api.isRemote) output = await api.convertRemote(folder.path, settings);
@@ -213,6 +245,9 @@ export default function App() {
         )}
         {uploading && <div className="folder">{uploading}</div>}
         <div className="spacer" />
+        <button onClick={() => openBatch(folder && !api.isRemote ? [folder.path] : [])} disabled={running || !!uploading} title="複数の本を続けて PDF にする">
+          まとめて書き出す
+        </button>
         {!api.isRemote && (
           <button onClick={() => setRemotePanel(true)} title="同じ Wi-Fi の iPad などのブラウザから使う">
             iPad から使う
@@ -332,6 +367,7 @@ export default function App() {
             <div className="empty">
               <p>ページ画像の入ったフォルダを、ここにドロップするか「フォルダを開く」で選んでください。</p>
               <p className="hint">1 フォルダ = 1 冊。ファイル名の順 (2 → 10 の順) にページを並べます。</p>
+              <p className="hint">何冊もあるときは、まとめてドロップするか、本のフォルダが入った親フォルダを選ぶと「まとめて書き出す」に並びます。</p>
             </div>
           )}
           {folder && folder.files.length > 0 && (
@@ -431,6 +467,10 @@ export default function App() {
         <BookPicker
           canClose={!!folder}
           onClose={() => setBookPicker(false)}
+          onBatch={() => {
+            setBookPicker(false);
+            openBatch([]);
+          }}
           onOpen={(path) => {
             setBookPicker(false);
             loadFolder(path);
@@ -438,6 +478,22 @@ export default function App() {
         />
       )}
       {remotePanel && <RemotePanel onClose={() => setRemotePanel(false)} />}
+      {batchOpen && (
+        <BatchPanel
+          settings={settings}
+          incoming={batchIncoming}
+          onClose={() => {
+            setBatchOpen(false);
+            // ブラウザで本をまだ開いていなければ、本を選ぶ画面に戻る
+            if (api.isRemote && !folder) setBookPicker(true);
+          }}
+          onOpen={(path) => {
+            setBatchOpen(false);
+            setBookPicker(false);
+            loadFolder(path);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -591,7 +647,7 @@ function PageInfo({ pages }: { pages: PreviewPage[] }) {
 }
 
 /// ブラウザ: Mac のライブラリの本を選ぶか、新しい本を作る
-function BookPicker(props: { canClose: boolean; onClose: () => void; onOpen: (path: string) => void }) {
+function BookPicker(props: { canClose: boolean; onClose: () => void; onBatch: () => void; onOpen: (path: string) => void }) {
   const [books, setBooks] = useState<api.Book[] | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -638,7 +694,12 @@ function BookPicker(props: { canClose: boolean; onClose: () => void; onOpen: (pa
           ))}
           {books?.length === 0 && <li className="hint">まだ本がありません。名前を入れて「作る」を押してください。</li>}
         </ul>
-        {props.canClose && <button onClick={props.onClose}>閉じる</button>}
+        <div className="buttons">
+          <button onClick={props.onBatch} disabled={!books?.some((b) => b.images > 0)}>
+            まとめて書き出す
+          </button>
+          {props.canClose && <button onClick={props.onClose}>閉じる</button>}
+        </div>
       </div>
     </div>
   );

@@ -247,8 +247,7 @@ fn convert_one(input: &Path, output: &Path, opts: &ConvertOptions) -> Result<()>
 
 // input 以下で画像を直接含むフォルダを 1 冊として、output/<相対パス>.pdf に変換する
 fn convert_tree(input: &Path, output: &Path, opts: &ConvertOptions) -> Result<()> {
-    let mut books = Vec::new();
-    collect_books(input, output, &mut books)?;
+    let books = book_core::input::find_books(input, Some(output))?;
     if books.is_empty() {
         bail!("no folders with images under '{}'", input.display());
     }
@@ -269,25 +268,6 @@ fn convert_tree(input: &Path, output: &Path, opts: &ConvertOptions) -> Result<()
     eprintln!("{} books, {} errors", books.len(), errors);
     if errors > 0 {
         bail!("{errors} book(s) failed");
-    }
-    Ok(())
-}
-
-fn collect_books(dir: &Path, output: &Path, books: &mut Vec<PathBuf>) -> Result<()> {
-    if dir == output {
-        return Ok(());
-    }
-    if !book_core::input::list_images(dir)?.is_empty() {
-        books.push(dir.to_path_buf());
-    }
-    let mut subdirs: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && !p.file_name().unwrap().to_string_lossy().starts_with(['_', '.']))
-        .collect();
-    subdirs.sort_by(|a, b| book_core::input::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
-    for d in subdirs {
-        collect_books(&d, output, books)?;
     }
     Ok(())
 }

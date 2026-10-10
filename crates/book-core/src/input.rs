@@ -25,6 +25,34 @@ pub fn list_images(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// `dir` とその下のフォルダから、画像のあるフォルダ (1 フォルダ = 1 冊) を探す。
+/// `_` や `.` で始まるフォルダと、`exclude` (出力先など) は見ない。並びはパスの自然順。
+pub fn find_books(dir: &Path, exclude: Option<&Path>) -> Result<Vec<PathBuf>> {
+    let mut books = Vec::new();
+    collect_books(dir, exclude, &mut books)?;
+    Ok(books)
+}
+
+fn collect_books(dir: &Path, exclude: Option<&Path>, books: &mut Vec<PathBuf>) -> Result<()> {
+    if exclude == Some(dir) {
+        return Ok(());
+    }
+    if !list_images(dir)?.is_empty() {
+        books.push(dir.to_path_buf());
+    }
+    let mut subdirs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("cannot read directory '{}'", dir.display()))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && !p.file_name().unwrap_or_default().to_string_lossy().starts_with(['_', '.']))
+        .collect();
+    subdirs.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+    for d in subdirs {
+        collect_books(&d, exclude, books)?;
+    }
+    Ok(())
+}
+
 fn is_supported(p: &Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
@@ -183,6 +211,20 @@ pub fn fit_to_box(img: &RgbImage, max_w: u32, max_h: u32) -> RgbImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_books_in_tree() {
+        let root = std::env::temp_dir().join(format!("superbook-find-books-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (dir, file) in [("", "cover.jpg"), ("vol10", "1.jpg"), ("vol2", "1.png"), ("vol2/extra", "a.jpg"), ("_skip", "1.jpg"), ("out", "1.jpg"), ("empty", "note.txt")] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join(file), b"").unwrap();
+        }
+        let found = find_books(&root, Some(&root.join("out"))).unwrap();
+        let rel: Vec<String> = found.iter().map(|p| p.strip_prefix(&root).unwrap().display().to_string()).collect();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(rel, ["", "vol2", "vol2/extra", "vol10"]);
+    }
 
     #[test]
     fn natural_order() {
