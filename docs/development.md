@@ -33,7 +33,7 @@ SuperBookScanner/
 | モジュール | 内容 |
 |---|---|
 | `input` | 画像の列挙 (自然順)、EXIF 回転、heic の読み込み (Mac: `sips`、Windows: PowerShell から WIC) |
-| `unwarp` | UVDoc (ONNX、tract で CPU 推論) による写真の平面化。紙の範囲・台形・反り・背景 |
+| `unwarp` | UVDoc (ONNX、tract で CPU 推論) による写真の平面化。紙の範囲・台形・反り・背景。見開きは、全体を一度平面化してノドを探し、元の写真をノドで左右に切って 1 ページずつ平面化し直す (UVDoc は 1 ページ用のモデルなので) |
 | `split` | 見開き分割。ノドの影と本文の空白列から分割位置を探す |
 | `deskew` | 傾き補正。投影プロファイルの分散が最大になる角度 (±5°) |
 | `dewarp` | ノドの湾曲の補正。行をたどり多項式で近似し、変位場で展開 (旧 C# 版 `BookDewarp.cs` の移植) |

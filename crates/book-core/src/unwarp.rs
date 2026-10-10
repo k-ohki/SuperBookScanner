@@ -5,6 +5,10 @@
 //! その格子を元の解像度で補間して、元画像から画素を拾い直す (UVDoc の bilinear_unwarping と同じ)。
 //! 推論は tract (Rust だけで動く ONNX ランタイム) で CPU 上で行う。
 //!
+//! UVDoc は 1 ページの文書で学習したモデルなので、見開きの写真をそのまま渡すと (横長の写真を縦長の入力に
+//! 押し縮めることになり) ページの上の方などに折れたような段差を作ることがある。見開きは、全体を一度平面化して
+//! ノドの位置を探し、元の写真をノドで左右に切ってから、1 ページずつ平面化し直す (`unwarp_pages`)。
+//!
 //! モデルはページの影を折り目や反りと見誤り、文字を曲げてしまうことがある。そのときのために、
 //! 「紙の反りは直さない」(`curl = false`) では、格子の外周 (紙の輪郭) に最もよく合う射影変換 (台形補正) だけを使い、
 //! 格子の内側の曲がりは捨てる。ノドの湾曲は、文字の行をたどる歪み補正 (dewarp) に任せる。
@@ -105,8 +109,22 @@ pub fn predict_grid(img: &RgbImage, model: &Path) -> Result<(Vec<f32>, usize, us
     Ok((grid.iter().copied().collect(), shape[2], shape[3]))
 }
 
+/// 平面化に使った格子 (出力の各点が元画像のどこに当たるか。2 x gh x gw、-1..1)。
+#[derive(Clone, Debug)]
+pub struct UnwarpGrid {
+    pub grid: Vec<f32>,
+    pub gh: usize,
+    pub gw: usize,
+}
+
 /// 写真のページを平面化する。出力は入力と同じ大きさ。
 pub fn unwarp(img: &RgbImage, options: &UnwarpOptions) -> (RgbImage, UnwarpResult) {
+    let (out, r, _) = unwarp_with_grid(img, options);
+    (out, r)
+}
+
+/// `unwarp` と同じ。使った格子も返す (平面化できなかったときは None)。
+pub fn unwarp_with_grid(img: &RgbImage, options: &UnwarpOptions) -> (RgbImage, UnwarpResult, Option<UnwarpGrid>) {
     let model = match options.model.clone().or_else(find_model) {
         Some(m) => m,
         None => {
@@ -116,25 +134,62 @@ pub fn unwarp(img: &RgbImage, options: &UnwarpOptions) -> (RgbImage, UnwarpResul
                     applied: false,
                     message: format!("{MODEL_FILE} が見つかりません"),
                 },
+                None,
             )
         }
     };
     match predict_grid(img, &model) {
-        Ok((grid, gh, gw)) => (
-            remap(img, &if options.curl { grid } else { flatten_grid(&grid, gh, gw) }, gh, gw),
-            UnwarpResult {
-                applied: true,
-                message: String::new(),
-            },
-        ),
+        Ok((grid, gh, gw)) => {
+            let grid = if options.curl { grid } else { flatten_grid(&grid, gh, gw) };
+            (
+                remap(img, &grid, gh, gw),
+                UnwarpResult {
+                    applied: true,
+                    message: String::new(),
+                },
+                Some(UnwarpGrid { grid, gh, gw }),
+            )
+        }
         Err(e) => (
             img.clone(),
             UnwarpResult {
                 applied: false,
                 message: format!("{e:#}"),
             },
+            None,
         ),
     }
+}
+
+/// 見開きを 1 ページずつ平面化する。
+/// `gutter_x` は、見開き全体を平面化した画像 (大きさは `src` と同じ) でのノドの位置。
+/// それを格子で元の写真の位置に戻し、少し重なるように左右に切って、それぞれを平面化する。
+pub fn unwarp_pages(src: &RgbImage, grid: &UnwarpGrid, gutter_x: u32, options: &UnwarpOptions) -> Vec<(RgbImage, UnwarpResult)> {
+    let (w, h) = src.dimensions();
+    let (left_end, right_start) = gutter_cut(w, grid, gutter_x);
+    let left = image::imageops::crop_imm(src, 0, 0, left_end, h).to_image();
+    let right = image::imageops::crop_imm(src, right_start, 0, w - right_start, h).to_image();
+    [left, right].iter().map(|page| unwarp(page, options)).collect()
+}
+
+/// 元の写真を左右に切る位置 (左のページの右端, 右のページの左端)。ノドの線をはさんで少し重ねる。
+/// 重ねすぎると隣のページが入って、ノド側が曲がって平面化される。
+fn gutter_cut(w: u32, grid: &UnwarpGrid, gutter_x: u32) -> (u32, u32) {
+    let (gw, gh) = (grid.gw, grid.gh);
+    // ノドの列 (平面化後の x) に当たる、元の写真での x を上から下まで求める
+    let gx = gutter_x as f64 / (w - 1).max(1) as f64 * (gw - 1) as f64;
+    let xs: Vec<f64> = (0..gh)
+        .map(|j| {
+            let u = crate::imgutil::sample_bilinear_f32(&grid.grid[..gh * gw], gw, gh, gx, j as f64);
+            (u + 1.0) / 2.0 * (w - 1) as f64
+        })
+        .collect();
+    let lo = xs.iter().copied().fold(f64::MAX, f64::min);
+    let hi = xs.iter().copied().fold(f64::MIN, f64::max);
+    let margin = w as f64 * 0.01;
+    let left_end = ((hi + margin).round() as u32).clamp(1, w);
+    let right_start = ((lo - margin).round().max(0.0) as u32).min(w - 1);
+    (left_end, right_start)
 }
 
 /// 格子を、その外周の点に最もよく合う射影変換 (ホモグラフィ) で作り直す。
@@ -313,5 +368,18 @@ mod tests {
                 assert!((a[c] as i32 - b[c] as i32).abs() <= 1);
             }
         }
+    }
+
+    // ノドが写真の中で斜めでも、その線をはさむように切る
+    #[test]
+    fn gutter_cut_follows_slanted_gutter() {
+        // 出力の x = 中央の列が、元の写真では上で 0.1、下で -0.1 (正規化座標) に当たる
+        let (gh, gw) = (5, 5);
+        let grid = grid_from(gh, gw, |s, t| (s * 2.0 - 1.0 + (0.1 - 0.2 * t) * (1.0 - (2.0 * s - 1.0).abs()), t * 2.0 - 1.0));
+        let w = 1001;
+        let (left_end, right_start) = gutter_cut(w, &UnwarpGrid { grid, gh, gw }, 500);
+        // 上端は x = 550、下端は x = 450。それぞれ 1% (10 px) 重ねる
+        assert!((left_end as i32 - 560).abs() <= 2, "{left_end}");
+        assert!((right_start as i32 - 440).abs() <= 2, "{right_start}");
     }
 }
