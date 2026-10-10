@@ -125,7 +125,7 @@ pub struct ImageResult {
 }
 
 /// 入力画像 1 枚分の補正を行う。見開きなら左右 2 ページに分けて、それぞれを補正する。
-/// 処理: 読み込み → 回転 → 平面化 → 見開き分割 → 大きさの正規化 → 傾き補正 → 歪み補正 → 影の除去 → 本文の外接矩形。
+/// 処理: 読み込み → 回転 → 平面化 → 見開き分割 → 大きさの正規化 → 傾き補正 → 歪み補正 (平面化しなかったページだけ) → 影の除去 → 本文の外接矩形。
 /// 書き出し時と同じ処理なので、UI のプレビューにも使う。
 pub fn process_image(file: &Path, options: &ConvertOptions) -> Result<Vec<(image::RgbImage, PageReport)>> {
     Ok(process_image_with(file, options, &PageOverride::default())?.pages)
@@ -198,9 +198,14 @@ fn process_page_image(img: image::RgbImage, options: &ConvertOptions, ovr: &Page
         img = out;
         report.deskew = Some(r);
     }
+    // 文字の行をたどる歪み補正は、UVDoc で平面化できなかった (しなかった) ページにだけ使う。
+    // UVDoc で 1 ページずつ平面化したページにかけると、ノド側をかえって曲げてしまうため。
+    // 画像ごとに「する」を選べば、平面化したページにもかける
+    let unwarped = report.unwarp.as_ref().is_some_and(|r| r.applied);
     let dewarp_options = match ovr.dewarp {
         Some(false) => None,
         Some(true) => Some(options.dewarp.clone().unwrap_or_default()),
+        None if unwarped => None,
         None => options.dewarp.clone(),
     };
     if let Some(o) = &dewarp_options {
