@@ -249,6 +249,7 @@ export default function App() {
           <h3>補正</h3>
           <Check label="傾き補正" value={settings.deskew} onChange={(v) => set("deskew", v)} />
           <Check label="歪み補正 (ノドの湾曲)" value={settings.dewarp} onChange={(v) => set("dewarp", v)} />
+          {settings.dewarp && settings.unwarp && <p className="hint sub">写真を平らにしたページには使いません (平らにしない画像だけ)。</p>}
           <Check label="影・照明ムラの除去" value={settings.illumination} onChange={(v) => set("illumination", v)} />
           <Check label="余白をそろえる" value={settings.crop} onChange={(v) => set("crop", v)} />
           {settings.crop && (
