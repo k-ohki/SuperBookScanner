@@ -5,7 +5,8 @@
 //!
 //! 処理の流れ:
 //!   1. 解析用に縮小したグレー画像を 2 値化し、文字らしい連結成分だけを残す
-//!   2. 文字を横方向に連結してテキスト行を作り、各行の中心線を多項式で近似する
+//!   2. 文字を横方向に連結してテキスト行を作り、各行の中心線を多項式で近似する。
+//!      多項式では表せない急な段差 (紙の折れ、平面化の誤り) は、多項式との差の移動中央値で上乗せする
 //!   3. 各行について「平らな部分」に頑健に直線を当てはめ、曲線と直線の差を縦方向の変位とする
 //!      (縦書きなどで行が取れない場合は、本文ブロックの上端・下端の包絡線を代わりに使う)
 //!   4. 複数の行の変位を y 方向に補間して、ページ全体の変位場 D(x, y) を作る
@@ -84,6 +85,10 @@ struct Curve {
     disp_max: f64,
     is_envelope: bool,
     cx: f64,
+    /// 多項式からのずれ (行の実際の形)。等間隔 (detail_step) に並べた値。空なら多項式だけを使う
+    detail: Vec<f64>,
+    detail_x0: f64,
+    detail_step: f64,
 }
 
 impl Curve {
@@ -91,7 +96,23 @@ impl Curve {
         (x - self.cx) / self.cx
     }
     fn y(&self, x: f64) -> f64 {
+        poly_eval(&self.poly, self.u(x)) + self.detail_at(x)
+    }
+    /// 多項式だけの値 (範囲外への外挿の傾きに使う。段差の局所的な傾きで外挿しないため)
+    fn y_smooth(&self, x: f64) -> f64 {
         poly_eval(&self.poly, self.u(x))
+    }
+    fn detail_at(&self, x: f64) -> f64 {
+        if self.detail.is_empty() {
+            return 0.0;
+        }
+        let f = ((x - self.detail_x0) / self.detail_step).clamp(0.0, (self.detail.len() - 1) as f64);
+        let i = (f as usize).min(self.detail.len().saturating_sub(2));
+        let t = f - i as f64;
+        if i + 1 >= self.detail.len() {
+            return self.detail[i];
+        }
+        self.detail[i] * (1.0 - t) + self.detail[i + 1] * t
     }
     fn target(&self, x: f64) -> f64 {
         self.line_a + self.line_b * x
@@ -356,11 +377,92 @@ fn detect_line_curves(char_mask: &GrayImage, char_height: f64, options: &DewarpO
         let span = (xs[xs.len() - 1] - xs[0]) / w as f64;
         let degree = if span < 0.35 { 2 } else { options.poly_degree };
 
-        if let Some(c) = fit_curve(&xs, &ys, degree, cx, char_height * 0.35, false, 0.0, 0.0) {
+        if let Some(mut c) = fit_curve(&xs, &ys, degree, cx, char_height * 0.35, false, 0.0, 0.0) {
+            add_detail(&mut c, &xs, &ys, char_height);
             curves.push(c);
         }
     }
     curves
+}
+
+/// 曲線の「平らな部分」に頑健に直線を当てはめ (ノド側の曲がった部分を外れ値として除く)、
+/// 端点での変位と傾きを求める。
+fn fit_target_line(c: &mut Curve) -> Option<()> {
+    let n = 200usize;
+    let sx: Vec<f64> = (0..n).map(|i| c.x_min + (c.x_max - c.x_min) * i as f64 / (n - 1) as f64).collect();
+    let sy: Vec<f64> = sx.iter().map(|&x| c.y(x)).collect();
+    let mut wts = vec![1.0; sx.len()];
+    let (mut a, mut b) = (0.0, 0.0);
+    for _ in 0..6 {
+        match weighted_line_fit(&sx, &sy, &wts) {
+            Some(r) => (a, b) = r,
+            None => return None,
+        }
+        let res: Vec<f64> = sx.iter().zip(&sy).map(|(x, y)| (y - (a + b * x)).abs()).collect();
+        let mut sorted = res.clone();
+        sorted.sort_by(|p, q| p.partial_cmp(q).unwrap());
+        let med = sorted[sorted.len() / 2];
+        let th = (med * 1.5).max(0.5);
+        for (wt, r) in wts.iter_mut().zip(&res) {
+            *wt = if *r <= th { 1.0 } else { 0.0 };
+        }
+        if wts.iter().sum::<f64>() < sx.len() as f64 * 0.3 {
+            break;
+        }
+    }
+    c.line_a = a;
+    c.line_b = b;
+
+    // 端点での変位と傾き (範囲外への外挿用、端の 3% の割線。傾きは多項式だけから求める)
+    let edge = ((c.x_max - c.x_min) * 0.03).max(2.0);
+    c.disp_min = c.y(c.x_min) - c.target(c.x_min);
+    c.disp_max = c.y(c.x_max) - c.target(c.x_max);
+    let smooth = |x: f64| c.y_smooth(x) - c.target(x);
+    let slope_min = (smooth(c.x_min) - smooth(c.x_min + edge)) / -edge;
+    let slope_max = (smooth(c.x_max) - smooth(c.x_max - edge)) / edge;
+    c.slope_min = slope_min;
+    c.slope_max = slope_max;
+    Some(())
+}
+
+/// 多項式では表せない段差を、多項式との差の移動中央値として曲線に加え、目標の直線を当てはめ直す。
+/// 中央値は段差 (折れ目) を保ち、ルビなどで短く盛り上がったところは無視する。
+fn add_detail(c: &mut Curve, xs: &[f64], ys: &[f64], char_height: f64) {
+    if xs.len() < 8 {
+        return;
+    }
+    let res: Vec<f64> = xs.iter().zip(ys).map(|(&x, &y)| y - poly_eval(&c.poly, c.u(x))).collect();
+    let half = ((char_height * 2.0).round() as usize).max(2);
+    let step = (char_height / 2.0).max(1.0);
+    let (x0, x1) = (xs[0], xs[xs.len() - 1]);
+    let n = ((x1 - x0) / step).floor() as usize + 1;
+    let mut detail: Vec<f64> = Vec::with_capacity(n);
+    let mut k = 0;
+    let mut window: Vec<f64> = Vec::new();
+    for i in 0..n {
+        let x = x0 + i as f64 * step;
+        while k < xs.len() && xs[k] < x {
+            k += 1;
+        }
+        let lo = k.saturating_sub(half);
+        let hi = (k + half).min(xs.len());
+        window.clear();
+        window.extend(res[lo..hi].iter().filter(|r| r.abs() < char_height));
+        if window.is_empty() {
+            detail.push(0.0);
+            continue;
+        }
+        window.sort_by(|a, b| a.total_cmp(b));
+        detail.push(window[window.len() / 2]);
+    }
+    // 小さな揺れ (文字の形による) は捨て、段差だけを残す
+    if detail.iter().fold(0f64, |m, d| m.max(d.abs())) < char_height * 0.15 {
+        return;
+    }
+    c.detail = detail;
+    c.detail_x0 = x0;
+    c.detail_step = step;
+    fit_target_line(c);
 }
 
 // 縦書き等のための、本文ブロック上端・下端の包絡線
@@ -460,37 +562,12 @@ fn fit_curve(xs: &[f64], ys: &[f64], degree: usize, cx: f64, max_rms: f64, robus
         disp_min: 0.0,
         disp_max: 0.0,
         is_envelope: false,
+        detail: Vec::new(),
+        detail_x0: 0.0,
+        detail_step: 1.0,
     };
 
-    // 「平らな部分」に頑健に直線を当てはめる (ノド側の曲がった部分を外れ値として除く)
-    let step = (px.len() / 200).max(1);
-    let sx: Vec<f64> = px.iter().step_by(step).copied().collect();
-    let sy: Vec<f64> = sx.iter().map(|&x| curve.y(x)).collect();
-    let mut wts = vec![1.0; sx.len()];
-    let (mut a, mut b) = (0.0, 0.0);
-    for _ in 0..6 {
-        (a, b) = weighted_line_fit(&sx, &sy, &wts)?;
-        let res: Vec<f64> = sx.iter().zip(&sy).map(|(x, y)| (y - (a + b * x)).abs()).collect();
-        let mut sorted = res.clone();
-        sorted.sort_by(|p, q| p.partial_cmp(q).unwrap());
-        let med = sorted[sorted.len() / 2];
-        let th = (med * 1.5).max(0.5);
-        for (wt, r) in wts.iter_mut().zip(&res) {
-            *wt = if *r <= th { 1.0 } else { 0.0 };
-        }
-        if wts.iter().sum::<f64>() < sx.len() as f64 * 0.3 {
-            break;
-        }
-    }
-    curve.line_a = a;
-    curve.line_b = b;
-
-    // 端点での変位と傾き (範囲外への外挿用、端の 3% の割線)
-    let edge = ((curve.x_max - curve.x_min) * 0.03).max(2.0);
-    curve.disp_min = curve.y(curve.x_min) - curve.target(curve.x_min);
-    curve.disp_max = curve.y(curve.x_max) - curve.target(curve.x_max);
-    curve.slope_min = (curve.disp_min - (curve.y(curve.x_min + edge) - curve.target(curve.x_min + edge))) / -edge;
-    curve.slope_max = (curve.disp_max - (curve.y(curve.x_max - edge) - curve.target(curve.x_max - edge))) / edge;
+    fit_target_line(&mut curve)?;
     Some(curve)
 }
 
