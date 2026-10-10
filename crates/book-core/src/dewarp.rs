@@ -5,12 +5,9 @@
 //!
 //! 処理の流れ:
 //!   1. 解析用に縮小したグレー画像を 2 値化し、文字らしい連結成分だけを残す
-//!   2. 文字を横方向に連結してテキスト行を作り、各行の中心線を多項式で近似する。
-//!      多項式では表せない急な段差 (紙の折れ、平面化の誤り) は、多項式との差の移動中央値で上乗せする
+//!   2. 文字を横方向に連結してテキスト行を作り、各行の中心線を多項式で近似する
 //!   3. 各行について「平らな部分」に頑健に直線を当てはめ、曲線と直線の差を縦方向の変位とする
 //!      (縦書きなどで行が取れない場合は、本文ブロックの上端・下端の包絡線を代わりに使う)
-//!      文字の行のほかに、枠・写真・帯の縁など「本来まっすぐな横の境目」も同じように使う
-//!      (文章がない上の方や、図の多いページでも曲がりを直せるように)
 //!   4. 複数の行の変位を y 方向に補間して、ページ全体の変位場 D(x, y) を作る
 //!   5. ノド付近の奥行きによる横方向の縮みを、変位プロファイルの弧長で近似して伸ばす
 //!   6. 画像を展開する (双三次補間)
@@ -41,8 +38,6 @@ pub struct DewarpOptions {
     pub horizontal_strength: f64,
     /// テキスト行が少ない場合 (縦書き等) に本文の上端・下端の包絡線を使う
     pub use_envelope_fallback: bool,
-    /// 枠・写真・帯の縁などの長い横の境目も、まっすぐにする手がかりに使う
-    pub use_edges: bool,
 }
 
 impl Default for DewarpOptions {
@@ -57,7 +52,6 @@ impl Default for DewarpOptions {
             correct_horizontal: true,
             horizontal_strength: 1.0,
             use_envelope_fallback: true,
-            use_edges: true,
         }
     }
 }
@@ -68,8 +62,6 @@ pub struct DewarpResult {
     pub message: String,
     pub num_line_curves: usize,
     pub num_envelope_curves: usize,
-    #[serde(default)]
-    pub num_edge_curves: usize,
     pub max_displacement_px: f64,
     pub output_width: u32,
     pub output_height: u32,
@@ -91,12 +83,7 @@ struct Curve {
     disp_min: f64, // 両端での変位
     disp_max: f64,
     is_envelope: bool,
-    is_edge: bool,
     cx: f64,
-    /// 多項式からのずれ (行の実際の形)。等間隔 (detail_step) に並べた値。空なら多項式だけを使う
-    detail: Vec<f64>,
-    detail_x0: f64,
-    detail_step: f64,
 }
 
 impl Curve {
@@ -104,23 +91,7 @@ impl Curve {
         (x - self.cx) / self.cx
     }
     fn y(&self, x: f64) -> f64 {
-        poly_eval(&self.poly, self.u(x)) + self.detail_at(x)
-    }
-    /// 多項式だけの値 (範囲外への外挿の傾きに使う。段差の局所的な傾きで外挿しないため)
-    fn y_smooth(&self, x: f64) -> f64 {
         poly_eval(&self.poly, self.u(x))
-    }
-    fn detail_at(&self, x: f64) -> f64 {
-        if self.detail.is_empty() {
-            return 0.0;
-        }
-        let f = ((x - self.detail_x0) / self.detail_step).clamp(0.0, (self.detail.len() - 1) as f64);
-        let i = (f as usize).min(self.detail.len().saturating_sub(2));
-        let t = f - i as f64;
-        if i + 1 >= self.detail.len() {
-            return self.detail[i];
-        }
-        self.detail[i] * (1.0 - t) + self.detail[i + 1] * t
     }
     fn target(&self, x: f64) -> f64 {
         self.line_a + self.line_b * x
@@ -183,12 +154,6 @@ pub fn dewarp(src: &RgbImage, options: &DewarpOptions) -> (RgbImage, DewarpResul
         let env = detect_envelope_curves(&char_mask, char_height, options);
         result.num_envelope_curves = env.len();
         curves.extend(env);
-    }
-
-    if options.use_edges {
-        let edges = detect_edge_curves(&small, char_height, options);
-        result.num_edge_curves = edges.len();
-        curves.extend(edges);
     }
 
     if curves.len() < 2 || (result.num_envelope_curves == 0 && curves.len() < options.min_lines) {
@@ -391,198 +356,11 @@ fn detect_line_curves(char_mask: &GrayImage, char_height: f64, options: &DewarpO
         let span = (xs[xs.len() - 1] - xs[0]) / w as f64;
         let degree = if span < 0.35 { 2 } else { options.poly_degree };
 
-        if let Some(mut c) = fit_curve(&xs, &ys, degree, cx, char_height * 0.35, false, 0.0, 0.0) {
-            add_detail(&mut c, &xs, &ys, char_height);
+        if let Some(c) = fit_curve(&xs, &ys, degree, cx, char_height * 0.35, false, 0.0, 0.0) {
             curves.push(c);
         }
     }
     curves
-}
-
-/// 曲線の「平らな部分」に頑健に直線を当てはめ (ノド側の曲がった部分を外れ値として除く)、
-/// 端点での変位と傾きを求める。
-fn fit_target_line(c: &mut Curve) -> Option<()> {
-    let n = 200usize;
-    let sx: Vec<f64> = (0..n).map(|i| c.x_min + (c.x_max - c.x_min) * i as f64 / (n - 1) as f64).collect();
-    let sy: Vec<f64> = sx.iter().map(|&x| c.y(x)).collect();
-    let mut wts = vec![1.0; sx.len()];
-    let (mut a, mut b) = (0.0, 0.0);
-    for _ in 0..6 {
-        match weighted_line_fit(&sx, &sy, &wts) {
-            Some(r) => (a, b) = r,
-            None => return None,
-        }
-        let res: Vec<f64> = sx.iter().zip(&sy).map(|(x, y)| (y - (a + b * x)).abs()).collect();
-        let mut sorted = res.clone();
-        sorted.sort_by(|p, q| p.partial_cmp(q).unwrap());
-        let med = sorted[sorted.len() / 2];
-        let th = (med * 1.5).max(0.5);
-        for (wt, r) in wts.iter_mut().zip(&res) {
-            *wt = if *r <= th { 1.0 } else { 0.0 };
-        }
-        if wts.iter().sum::<f64>() < sx.len() as f64 * 0.3 {
-            break;
-        }
-    }
-    c.line_a = a;
-    c.line_b = b;
-
-    // 端点での変位と傾き (範囲外への外挿用、端の 3% の割線。傾きは多項式だけから求める)
-    let edge = ((c.x_max - c.x_min) * 0.03).max(2.0);
-    c.disp_min = c.y(c.x_min) - c.target(c.x_min);
-    c.disp_max = c.y(c.x_max) - c.target(c.x_max);
-    let smooth = |x: f64| c.y_smooth(x) - c.target(x);
-    let slope_min = (smooth(c.x_min) - smooth(c.x_min + edge)) / -edge;
-    let slope_max = (smooth(c.x_max) - smooth(c.x_max - edge)) / edge;
-    c.slope_min = slope_min;
-    c.slope_max = slope_max;
-    Some(())
-}
-
-/// 多項式では表せない段差を、多項式との差の移動中央値として曲線に加え、目標の直線を当てはめ直す。
-/// 中央値は段差 (折れ目) を保ち、ルビなどで短く盛り上がったところは無視する。
-fn add_detail(c: &mut Curve, xs: &[f64], ys: &[f64], char_height: f64) {
-    if xs.len() < 8 {
-        return;
-    }
-    let res: Vec<f64> = xs.iter().zip(ys).map(|(&x, &y)| y - poly_eval(&c.poly, c.u(x))).collect();
-    let half = ((char_height * 2.0).round() as usize).max(2);
-    let step = (char_height / 2.0).max(1.0);
-    let (x0, x1) = (xs[0], xs[xs.len() - 1]);
-    let n = ((x1 - x0) / step).floor() as usize + 1;
-    let mut detail: Vec<f64> = Vec::with_capacity(n);
-    let mut k = 0;
-    let mut window: Vec<f64> = Vec::new();
-    for i in 0..n {
-        let x = x0 + i as f64 * step;
-        while k < xs.len() && xs[k] < x {
-            k += 1;
-        }
-        let lo = k.saturating_sub(half);
-        let hi = (k + half).min(xs.len());
-        window.clear();
-        window.extend(res[lo..hi].iter().filter(|r| r.abs() < char_height));
-        if window.is_empty() {
-            detail.push(0.0);
-            continue;
-        }
-        window.sort_by(|a, b| a.total_cmp(b));
-        detail.push(window[window.len() / 2]);
-    }
-    // 小さな揺れ (文字の形による) は捨て、段差だけを残す
-    if detail.iter().fold(0f64, |m, d| m.max(d.abs())) < char_height * 0.15 {
-        return;
-    }
-    c.detail = detail;
-    c.detail_x0 = x0;
-    c.detail_step = step;
-    fit_target_line(c);
-}
-
-/// 枠・写真・色の帯の縁など、長くてまっすぐなはずの横の境目 (明るさが段になって変わるところ) を探す。
-/// 細い罫線や地図の緯線 (両側が同じ明るさ) は、上下の範囲の中央値の差では反応しないので拾わない。
-/// 曲がりくねった境目 (海岸線など) は、多項式との差が大きいので除く。
-fn detect_edge_curves(gray: &GrayImage, char_height: f64, options: &DewarpOptions) -> Vec<Curve> {
-    let (w, h) = (gray.width() as usize, gray.height() as usize);
-    let k = ((char_height * 0.4).round() as usize).clamp(2, 64);
-    if h < 4 * k + 2 {
-        return Vec::new();
-    }
-    // 上 k 画素と下 k 画素の中央値の差 (中央値なので、k/2 より細い線には反応しない)
-    let px = gray.as_raw();
-    let mut g = vec![0f32; w * h];
-    let median = |x: usize, from: usize, buf: &mut [u8; 64]| -> f32 {
-        let b = &mut buf[..k];
-        for (i, v) in b.iter_mut().enumerate() {
-            *v = px[(from + i) * w + x];
-        }
-        b.sort_unstable();
-        b[k / 2] as f32
-    };
-    // 位置は平均の差の山で決める (中央値の差は平らな山になり、位置がぼやけるため)
-    let mut gm = vec![0f32; w * h];
-    let mut buf = [0u8; 64];
-    let mut col = vec![0u32; h + 1];
-    for x in 0..w {
-        for y in 0..h {
-            col[y + 1] = col[y] + px[y * w + x] as u32;
-        }
-        for y in k..h - k {
-            let up = median(x, y - k, &mut buf);
-            let down = median(x, y, &mut buf);
-            g[y * w + x] = down - up;
-            gm[y * w + x] = (col[y + k] - col[y]) as f32 / k as f32 - (col[y] - col[y - k]) as f32 / k as f32;
-        }
-    }
-    const THRESHOLD: f32 = 35.0;
-    let cx = w as f64 / 2.0;
-    let mut curves = Vec::new();
-    // 明→暗 と 暗→明 は別々に扱う (帯の上下の縁がつながらないように)
-    for sign in [1f32, -1f32] {
-        let mut mask = GrayImage::new(w as u32, h as u32);
-        for y in k + 1..h - k - 1 {
-            for x in 0..w {
-                let m = gm[y * w + x] * sign;
-                // 中央値の差で境目かどうかを決め、平均の差が縦方向に極大のところだけを残す (細い線にする)
-                if g[y * w + x] * sign > THRESHOLD && m >= gm[(y - 1) * w + x] * sign && m > gm[(y + 1) * w + x] * sign {
-                    mask.put_pixel(x as u32, y as u32, image::Luma([255]));
-                }
-            }
-        }
-        // 段になってずれた境目 (折れ目) も 1 本につなぐため、縦に少し太らせてから連結成分を作る
-        let reach = ((char_height * 0.3).round() as u32).max(1);
-        let closed = dilate_vertical(&imgutil::close_horizontal(&mask, ((char_height * 1.3).round() as u32).max(3)), reach);
-        let (labels, stats) = imgutil::components_with_stats(&closed);
-        for (i, st) in stats.iter().enumerate().skip(1) {
-            let (cw, chh) = (st.width as f64, st.height as f64 - 2.0 * reach as f64);
-            if st.area == 0 || cw < options.min_line_width_ratio * w as f64 || chh > char_height * 0.8 + cw * 0.06 || cw < chh * 8.0 {
-                continue;
-            }
-            let (x0, y0) = (st.left as usize, st.top as usize);
-            let mut xs = Vec::new();
-            let mut ys = Vec::new();
-            for x in x0..x0 + st.width as usize {
-                let (mut sum, mut n) = (0.0, 0.0);
-                for y in y0..y0 + st.height as usize {
-                    if labels[y * w + x] as usize == i && mask.get_pixel(x as u32, y as u32)[0] > 0 {
-                        sum += y as f64;
-                        n += 1.0;
-                    }
-                }
-                if n > 0.0 {
-                    xs.push(x as f64);
-                    ys.push(sum / n);
-                }
-            }
-            if (xs.len() as f64) < cw * 0.6 {
-                continue;
-            }
-            let span = (xs[xs.len() - 1] - xs[0]) / w as f64;
-            let degree = if span < 0.35 { 2 } else { options.poly_degree };
-            if let Some(mut c) = fit_curve(&xs, &ys, degree, cx, char_height * 0.25, false, 0.0, 0.0) {
-                add_detail(&mut c, &xs, &ys, char_height);
-                c.is_edge = true;
-                curves.push(c);
-            }
-        }
-    }
-    curves
-}
-
-/// 縦方向に r 画素ずつ太らせる。
-fn dilate_vertical(mask: &GrayImage, r: u32) -> GrayImage {
-    let (w, h) = mask.dimensions();
-    let mut out = GrayImage::new(w, h);
-    for y in 0..h {
-        for x in 0..w {
-            if mask.get_pixel(x, y)[0] > 0 {
-                for yy in y.saturating_sub(r)..(y + r + 1).min(h) {
-                    out.put_pixel(x, yy, image::Luma([255]));
-                }
-            }
-        }
-    }
-    out
 }
 
 // 縦書き等のための、本文ブロック上端・下端の包絡線
@@ -682,13 +460,37 @@ fn fit_curve(xs: &[f64], ys: &[f64], degree: usize, cx: f64, max_rms: f64, robus
         disp_min: 0.0,
         disp_max: 0.0,
         is_envelope: false,
-        is_edge: false,
-        detail: Vec::new(),
-        detail_x0: 0.0,
-        detail_step: 1.0,
     };
 
-    fit_target_line(&mut curve)?;
+    // 「平らな部分」に頑健に直線を当てはめる (ノド側の曲がった部分を外れ値として除く)
+    let step = (px.len() / 200).max(1);
+    let sx: Vec<f64> = px.iter().step_by(step).copied().collect();
+    let sy: Vec<f64> = sx.iter().map(|&x| curve.y(x)).collect();
+    let mut wts = vec![1.0; sx.len()];
+    let (mut a, mut b) = (0.0, 0.0);
+    for _ in 0..6 {
+        (a, b) = weighted_line_fit(&sx, &sy, &wts)?;
+        let res: Vec<f64> = sx.iter().zip(&sy).map(|(x, y)| (y - (a + b * x)).abs()).collect();
+        let mut sorted = res.clone();
+        sorted.sort_by(|p, q| p.partial_cmp(q).unwrap());
+        let med = sorted[sorted.len() / 2];
+        let th = (med * 1.5).max(0.5);
+        for (wt, r) in wts.iter_mut().zip(&res) {
+            *wt = if *r <= th { 1.0 } else { 0.0 };
+        }
+        if wts.iter().sum::<f64>() < sx.len() as f64 * 0.3 {
+            break;
+        }
+    }
+    curve.line_a = a;
+    curve.line_b = b;
+
+    // 端点での変位と傾き (範囲外への外挿用、端の 3% の割線)
+    let edge = ((curve.x_max - curve.x_min) * 0.03).max(2.0);
+    curve.disp_min = curve.y(curve.x_min) - curve.target(curve.x_min);
+    curve.disp_max = curve.y(curve.x_max) - curve.target(curve.x_max);
+    curve.slope_min = (curve.disp_min - (curve.y(curve.x_min + edge) - curve.target(curve.x_min + edge))) / -edge;
+    curve.slope_max = (curve.disp_max - (curve.y(curve.x_max - edge) - curve.target(curve.x_max - edge))) / edge;
     Some(curve)
 }
 
@@ -798,19 +600,9 @@ pub fn debug_image(src: &RgbImage, options: &DewarpOptions) -> RgbImage {
     if curves.len() < options.min_lines {
         curves.extend(detect_envelope_curves(&mask, ch, options));
     }
-    if options.use_edges {
-        curves.extend(detect_edge_curves(&small, ch, options));
-    }
     let (w, h) = out.dimensions();
     for c in &curves {
-        // 文字の行 = 赤、包絡線 = 紫、横の境目 = 青
-        let color = if c.is_envelope {
-            Rgb([255, 0, 255])
-        } else if c.is_edge {
-            Rgb([0, 90, 255])
-        } else {
-            Rgb([255, 0, 0])
-        };
+        let color = if c.is_envelope { Rgb([255, 0, 255]) } else { Rgb([255, 0, 0]) };
         let mut x = c.x_min;
         while x <= c.x_max {
             for (yy, col) in [(c.target(x), Rgb([0, 180, 0])), (c.y(x), color)] {
@@ -914,30 +706,5 @@ mod tests {
         let (out, r) = dewarp(&img, &DewarpOptions::default());
         assert!(!r.applied);
         assert_eq!(out.dimensions(), img.dimensions());
-    }
-
-    // 明るさが段になる横の境目 (帯の縁など) は、途中の段差も含めて拾う
-    #[test]
-    fn edge_with_step_is_detected() {
-        let (w, h) = (1000u32, 400u32);
-        // x < 500 では y = 200、x >= 500 では y = 190 で、上が白・下が灰色
-        let img = GrayImage::from_fn(w, h, |x, y| {
-            let edge = if x < 500 { 200 } else { 190 };
-            image::Luma([if y < edge { 250 } else { 120 }])
-        });
-        let curves = detect_edge_curves(&img, 20.0, &DewarpOptions::default());
-        assert_eq!(curves.len(), 1);
-        let c = &curves[0];
-        assert!(c.is_edge);
-        // 段差の両側で、曲線が実際の境目の位置を通る
-        assert!((c.y(250.0) - 200.0).abs() < 2.0, "{}", c.y(250.0));
-        assert!((c.y(750.0) - 190.0).abs() < 2.0, "{}", c.y(750.0));
-    }
-
-    // 細い線 (罫線・地図の緯線) は、両側が同じ明るさなので拾わない
-    #[test]
-    fn thin_line_is_ignored() {
-        let img = GrayImage::from_fn(1000, 400, |_, y| image::Luma([if (199..201).contains(&y) { 60 } else { 250 }]));
-        assert!(detect_edge_curves(&img, 20.0, &DewarpOptions::default()).is_empty());
     }
 }

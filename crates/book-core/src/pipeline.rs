@@ -145,18 +145,30 @@ pub fn process_image_with(file: &Path, options: &ConvertOptions, ovr: &PageOverr
         }
         o
     });
-    let unwarp_result = unwarp_options.map(|o| {
-        let (out, r) = unwarp::unwarp(&img, &o);
+    let photo = img.clone();
+    let mut unwarp_grid = None;
+    let unwarp_result = unwarp_options.as_ref().map(|o| {
+        let (out, r, grid) = unwarp::unwarp_with_grid(&img, o);
         img = out;
+        unwarp_grid = grid;
         r
     });
 
-    let (halves, split_result) = match (ovr.split, &options.split) {
+    let (mut halves, split_result) = match (ovr.split, &options.split) {
         (Some(SplitOverride::None), _) => (vec![img.clone()], SplitResult::default()),
         (Some(SplitOverride::At(r)), _) => split::split_at(&img, Some((r.clamp(0.0, 1.0) * img.width() as f64).round() as u32)),
         (None, Some(o)) => split::split_spread(&img, o),
         (None, None) => (vec![img.clone()], SplitResult::default()),
     };
+    // 見開きなら、元の写真をノドで切って 1 ページずつ平面化し直す (UVDoc は 1 ページ用のモデルなので)
+    let mut unwarp_results = vec![unwarp_result.clone(); halves.len()];
+    if let (2, Some(grid), Some(gutter), Some(o)) = (halves.len(), &unwarp_grid, split_result.gutter_x, &unwarp_options) {
+        let pages = unwarp::unwarp_pages(&photo, grid, gutter, o);
+        if pages.iter().all(|(_, r)| r.applied) {
+            unwarp_results = pages.iter().map(|(_, r)| Some(r.clone())).collect();
+            halves = pages.into_iter().map(|(p, _)| p).collect();
+        }
+    }
     let n = halves.len();
 
     let pages = halves
@@ -165,7 +177,7 @@ pub fn process_image_with(file: &Path, options: &ConvertOptions, ovr: &PageOverr
         .map(|(i, half)| {
             let mut report = PageReport {
                 source: file.to_path_buf(),
-                unwarp: unwarp_result.clone(),
+                unwarp: unwarp_results[i].clone(),
                 split: split_result.clone(),
                 half: if n > 1 { Some(i as u8) } else { None },
                 ..Default::default()
