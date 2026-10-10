@@ -30,6 +30,9 @@ enum Command {
         /// 写真のページの平面化 (紙の範囲・台形・反り。UVDoc) をしない
         #[arg(long)]
         no_unwarp: bool,
+        /// 平面化で紙の反りは直さず、紙の範囲と台形 (遠近) だけを直す (影で文字が曲がるとき)
+        #[arg(long)]
+        no_curl: bool,
         /// 平面化モデル (uvdoc.onnx) の場所
         #[arg(long)]
         unwarp_model: Option<PathBuf>,
@@ -89,6 +92,9 @@ enum Command {
         rotate: u16,
         #[arg(long)]
         model: Option<PathBuf>,
+        /// 紙の反りは直さず、紙の範囲と台形だけを直す
+        #[arg(long)]
+        no_curl: bool,
     },
     /// 1 枚の画像の歪み補正だけを行う (動作確認用)。--debug で検出した行の画像も出す
     Dewarp {
@@ -108,6 +114,7 @@ fn main() -> Result<()> {
             recursive,
             no_project,
             no_unwarp,
+            no_curl,
             unwarp_model,
             no_deskew,
             no_dewarp,
@@ -135,6 +142,7 @@ fn main() -> Result<()> {
                 opts.unwarp = None;
             } else if let Some(u) = opts.unwarp.as_mut() {
                 u.model = unwarp_model;
+                u.curl = !no_curl;
             }
             if no_deskew {
                 opts.deskew = None;
@@ -181,8 +189,14 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::Unwarp { input, output, rotate, model } => {
-            let r = book_core::unwarp::unwarp_file(&input, &output, rotate, &book_core::unwarp::UnwarpOptions { model })?;
+        Command::Unwarp {
+            input,
+            output,
+            rotate,
+            model,
+            no_curl,
+        } => {
+            let r = book_core::unwarp::unwarp_file(&input, &output, rotate, &book_core::unwarp::UnwarpOptions { model, curl: !no_curl })?;
             println!("{}", serde_json_string(&r));
             Ok(())
         }

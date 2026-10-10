@@ -39,6 +39,8 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* iPad の Safari ではアドレスバーを除いた高さにする */
+  height: 100dvh;
 }
 
 button,
@@ -51,8 +53,31 @@ select {
   padding: 4px 12px;
 }
 
-button:disabled {
+/* ボタンと同じ見た目のリンク・ラベル (PDF を開く、写真を追加) */
+a.button,
+label.button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+button:disabled,
+label.button.disabled {
   opacity: 0.5;
+}
+
+input[type="text"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
 }
 
 button.primary {
@@ -121,6 +146,11 @@ button.primary {
 }
 
 .row.sub {
+  padding-left: 22px;
+}
+
+/* 上の項目に付属する設定 (字下げ) */
+div.sub {
   padding-left: 22px;
 }
 
@@ -367,4 +397,99 @@ button.link {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* 本を選ぶ (ブラウザから使うとき) */
+.dialog.books {
+  width: min(480px, 90vw);
+}
+
+.new-book {
+  display: flex;
+  gap: 8px;
+}
+
+.new-book input {
+  flex: 1;
+}
+
+.book-list {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.book-list li {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.book-list li > button {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.book-list li > a.button {
+  display: flex;
+  align-items: center;
+}
+
+/* iPad から使う (アプリ) */
+.dialog.remote {
+  width: min(440px, 90vw);
+}
+
+.qr svg {
+  width: 180px;
+  height: 180px;
+  background: #fff;
+}
+
+/* タッチ操作の画面 (iPad など): 押しやすく、つかみやすく */
+@media (pointer: coarse) {
+  :root {
+    font-size: 15px;
+  }
+
+  button,
+  select,
+  a.button,
+  label.button {
+    padding: 8px 14px;
+  }
+
+  .page .box .handle {
+    width: 22px;
+    height: 22px;
+  }
+
+  .handle.nw { left: -11px; top: -11px; }
+  .handle.ne { right: -11px; top: -11px; }
+  .handle.sw { left: -11px; bottom: -11px; }
+  .handle.se { right: -11px; bottom: -11px; }
+}
+
+/* 縦向きの iPad など、幅が狭いとき: 設定を下に回す */
+@media (max-width: 900px) {
+  .body {
+    flex-direction: column-reverse;
+  }
+
+  .settings {
+    width: auto;
+    max-height: 35vh;
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+  }
 }

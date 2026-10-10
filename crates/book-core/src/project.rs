@@ -56,6 +56,9 @@ pub struct PageOverride {
     /// 写真の平面化をするか
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unwarp: Option<bool>,
+    /// 平面化で紙の反りも直すか (false なら紙の範囲と台形だけ。影で文字が曲がるとき用)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unwarp_curl: Option<bool>,
     /// 歪み補正をするか
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dewarp: Option<bool>,

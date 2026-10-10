@@ -93,7 +93,8 @@ windows/            Windows 版 (src-tauri、インストーラ設定、取得�
 | M3 ✅ | Tauri アプリ: フォルダ選択、補正前後のプレビュー、書き出し | Mac で起動確認 |
 | M4 ✅ | 写真の平面化 (UVDoc)・見開き分割 + 手動調整の画面 (画像ごとの回転・平面化・歪み補正・分割位置・本文の範囲・除外。入力フォルダの superbook.json に保存し、CLI の書き出しにも反映) | スマホで撮った見開き写真で確認 |
 | M5 ✅ | Windows 版: 同じ Tauri アプリ・Rust コアを Windows でもビルドする。Real-ESRGAN は Windows 版 (.exe)、heic は WIC で読む。インストーラは NSIS | CI (windows-latest) でビルド・テスト、実機で起動確認 |
-| M6 (任意) | ONNX + CoreML による AI 鮮明化、ページ番号の検出、OCR | |
+| M6 ✅ | iPad などから使う: アプリの中に Web サーバーを立て、同じ Wi-Fi のブラウザから同じ画面で使う。写真はブラウザからアップロードし、Mac の 書類/SuperBookScanner/ に 1 冊 1 フォルダで保存。認証なし (ライブラリの外は読み書きさせない) | Mac で API を通しで確認、iPad の Safari で確認 |
+| M7 (任意) | ONNX + CoreML による AI 鮮明化、ページ番号の検出、OCR | |
 
 M1 は Mac がなくても開発・テストできるので、ここから始める。M3 以降は Mac 上での確認が必要。
 

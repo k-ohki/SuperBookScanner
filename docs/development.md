@@ -12,7 +12,8 @@ SuperBookScanner/
 ├─ crates/
 │  ├─ book-core/         画像処理パイプライン (純 Rust、OpenCV 不要)。共通
 │  ├─ book-cli/          コマンドライン版 superbook。共通
-│  └─ book-app/          アプリの中身 (Tauri のコマンド)。共通。各 OS のアプリから run(context) を呼ぶ
+│  └─ book-app/          アプリの中身。共通。各 OS のアプリから run(context) を呼ぶ
+│                        ops.rs (処理の本体) / lib.rs (Tauri のコマンド) / remote.rs (iPad などから使う Web サーバー)
 ├─ ui/                   画面 (TypeScript + React、Vite)。共通
 ├─ models/uvdoc.onnx     写真の平面化モデル。アプリに同梱する (tauri.conf.json の bundle.resources)
 ├─ mac/                  Mac 版
@@ -43,6 +44,15 @@ SuperBookScanner/
 | `project` | 画像ごとの手動調整。入力フォルダの `superbook.json` に保存 |
 | `process` | 外部プログラムの起動。Windows ではコンソール画面を出さない |
 | `pipeline` | 上記をつないだ変換処理。ページ単位で並列 (rayon)、進捗通知と中止に対応 |
+
+## iPad などから使う仕組み (remote.rs)
+
+- アプリの中で axum の Web サーバーを `0.0.0.0:8765` で動かす。オン/オフは画面の「iPad から使う」(Tauri コマンド `remote_start` / `remote_stop`)
+- 画面はアプリと同じ `ui/` をそのまま配る (Tauri の asset resolver から読むので、アプリに組み込まれたファイルが使われる)
+- 画面側 (`ui/src/api.ts`) は、Tauri の中なら `invoke`、ブラウザなら `POST /api/<コマンド名>` (JSON) で同じ処理を呼ぶ。書き出しの進捗は Tauri のイベントのかわりに `GET /api/events` (Server-Sent Events)
+- ブラウザだけの API: `books` (本の一覧)、`create_book`、`upload/{本}` (multipart。連番 0001.jpg… で保存)、`download/{本}` (PDF)
+- 写真と PDF は「ライブラリ」(書類/SuperBookScanner/) に置き、ブラウザからのパスはすべてライブラリの中かを確かめる (認証はない)
+- 動いている間は macOS の App Nap とスリープを止める (`NSProcessInfo.beginActivity`)。止めないと、アプリが裏に回ったときに処理が数倍遅くなる
 
 ## ビルド
 
