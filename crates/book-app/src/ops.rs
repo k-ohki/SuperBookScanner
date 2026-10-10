@@ -89,6 +89,39 @@ pub fn open_folder(path: &str) -> Result<FolderInfo> {
     })
 }
 
+/// まとめて書き出すときの 1 冊 (画像のあるフォルダ)。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookFolder {
+    pub path: String,
+    pub name: String,
+    pub images: usize,
+}
+
+/// 選んだフォルダとその下から、画像のあるフォルダをすべて探す (同じフォルダは 1 回だけ)。
+pub fn find_books(paths: &[String]) -> Result<Vec<BookFolder>> {
+    let mut found: Vec<BookFolder> = Vec::new();
+    for p in paths {
+        for dir in book_core::input::find_books(Path::new(p), None)? {
+            let path = dir.display().to_string();
+            if found.iter().any(|b| b.path == path) {
+                continue;
+            }
+            found.push(BookFolder {
+                images: book_core::input::list_images(&dir)?.len(),
+                name: dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                path,
+            });
+        }
+    }
+    Ok(found)
+}
+
+/// それぞれのファイルがすでにあるか (書き出し済みの PDF をとばすため)。
+pub fn files_exist(paths: &[String]) -> Vec<bool> {
+    paths.iter().map(|p| Path::new(p).is_file()).collect()
+}
+
 /// 1 枚分の手動調整をフォルダの superbook.json に保存する (空なら消す)。
 pub fn save_override(folder: &str, file: &str, value: PageOverride) -> Result<()> {
     let dir = PathBuf::from(folder);

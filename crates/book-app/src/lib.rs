@@ -8,7 +8,7 @@ mod remote;
 
 use book_core::pipeline::Progress;
 use book_core::project::PageOverride;
-use ops::{FolderInfo, Preview, Settings};
+use ops::{BookFolder, FolderInfo, Preview, Settings};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -32,6 +32,17 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Sen
 #[tauri::command]
 fn open_folder(path: String) -> Result<FolderInfo, String> {
     ops::open_folder(&path).map_err(|e| format!("{e:#}"))
+}
+
+/// まとめて書き出す本を探す (選んだフォルダとその下の、画像のあるフォルダ)。
+#[tauri::command]
+async fn find_books(paths: Vec<String>) -> Result<Vec<BookFolder>, String> {
+    blocking(move || ops::find_books(&paths)).await
+}
+
+#[tauri::command]
+fn files_exist(paths: Vec<String>) -> Vec<bool> {
+    ops::files_exist(&paths)
 }
 
 #[tauri::command]
@@ -122,6 +133,8 @@ pub fn run(context: tauri::Context) {
         })
         .invoke_handler(tauri::generate_handler![
             open_folder,
+            find_books,
+            files_exist,
             save_override,
             thumbnail,
             preview,

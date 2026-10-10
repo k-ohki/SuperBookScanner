@@ -87,6 +87,15 @@ export type Progress =
 
 export const openFolder = (path: string) => call<FolderInfo>("open_folder", { path });
 
+/// まとめて書き出すときの 1 冊 (画像のあるフォルダ)
+export type BookFolder = { path: string; name: string; images: number };
+
+/// 選んだフォルダとその下から、画像のあるフォルダをすべて探す (アプリだけ)
+export const findBooks = (paths: string[]) => call<BookFolder[]>("find_books", { paths });
+
+/// それぞれのファイルがすでにあるか (アプリだけ)
+export const filesExist = (paths: string[]) => call<boolean[]>("files_exist", { paths });
+
 export const thumbnail = (path: string, maxSide: number, rotate: number) => call<string>("thumbnail", { path, maxSide, rotate });
 
 export const preview = (path: string, settings: Settings, value: PageOverride, maxSide: number) => call<Preview>("preview", { path, settings, value, maxSide });
@@ -149,6 +158,14 @@ export const onProgress = async (cb: (p: Progress) => void): Promise<() => void>
     setTimeout(resolve, 2000);
   });
   return () => es.close();
+};
+
+/// 進捗を表示用の文言と割合 (0..1) にする
+export const describeProgress = (p: Progress, sharpen: boolean): { label: string; fraction: number } | null => {
+  if (p.kind === "PageProcessed") return { label: `補正 ${p.done} / ${p.total}`, fraction: (p.done / p.total) * (sharpen ? 0.4 : 0.8) };
+  if (p.kind === "PageSharpened") return { label: `AI 鮮明化 ${p.done} / ${p.total}`, fraction: 0.4 + (p.done / p.total) * 0.45 };
+  if (p.kind === "PageEncoded") return { label: `PDF 作成 ${p.done} / ${p.total}`, fraction: (sharpen ? 0.85 : 0.8) + (p.done / p.total) * 0.15 };
+  return null;
 };
 
 export const initialFolder = () => call<string | null>("initial_folder");

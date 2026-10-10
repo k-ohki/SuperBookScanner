@@ -461,6 +461,81 @@ button.link {
   background: #fff;
 }
 
+/* まとめて書き出す */
+.dialog.batch {
+  width: min(640px, 92vw);
+}
+
+.dialog .buttons.start {
+  justify-content: flex-start;
+}
+
+.batch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 45vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.batch-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.batch-list li:last-child {
+  border-bottom: none;
+}
+
+.batch-list .what {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.batch-list .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-list .message {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.batch-list .status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.batch-list .status progress {
+  width: 90px;
+}
+
+.batch-list li.done .name,
+.batch-list li.skipped .name {
+  color: var(--muted);
+}
+
+.dialog .dest {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dialog .dest .path {
+  flex: 1;
+}
+
 /* タッチ操作の画面 (iPad など): 押しやすく、つかみやすく */
 @media (pointer: coarse) {
   :root {
