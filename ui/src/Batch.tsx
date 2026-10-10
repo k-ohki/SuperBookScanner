@@ -56,8 +56,12 @@ export default function BatchPanel(props: {
   onOpen: (path: string) => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
-  const [dest, setDest] = useState<Dest>(load("dest") === "folder" ? "folder" : "beside");
-  const [destDir, setDestDir] = useState<string>(load("destDir") ?? "");
+  // まだ選んだことがなければ、1 冊ずつの書き出しと同じ保存先 (Windows は D:\MyProgram\SuperBookScanner\PDF) にまとめる
+  const [dest, setDest] = useState<Dest>(() => {
+    const d = load("dest");
+    return d === "folder" || d === "beside" ? d : api.loadOutputDir() ? "folder" : "beside";
+  });
+  const [destDir, setDestDir] = useState<string>(() => load("destDir") ?? api.loadOutputDir());
   const [skipExisting, setSkipExisting] = useState(load("skipExisting") !== "false");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +139,16 @@ export default function BatchPanel(props: {
     });
     let exists: boolean[] = targets.map((t) => t.pdf);
     if (!api.isRemote) {
+      if (dest === "folder") {
+        // まとめる保存先がまだなければ作る
+        try {
+          await api.ensureDir(destDir);
+        } catch (e) {
+          setError(String(e));
+          setRunning(false);
+          return;
+        }
+      }
       try {
         exists = await api.filesExist(outputs);
       } catch {

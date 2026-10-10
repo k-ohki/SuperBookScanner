@@ -216,12 +216,24 @@ mod tests {
     fn find_books_in_tree() {
         let root = std::env::temp_dir().join(format!("superbook-find-books-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        for (dir, file) in [("", "cover.jpg"), ("vol10", "1.jpg"), ("vol2", "1.png"), ("vol2/extra", "a.jpg"), ("_skip", "1.jpg"), ("out", "1.jpg"), ("empty", "note.txt")] {
+        for (dir, file) in [
+            ("", "cover.jpg"),
+            ("vol10", "1.jpg"),
+            ("vol2", "1.png"),
+            ("vol2/extra", "a.jpg"),
+            ("_skip", "1.jpg"),
+            ("out", "1.jpg"),
+            ("empty", "note.txt"),
+        ] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
             std::fs::write(root.join(dir).join(file), b"").unwrap();
         }
         let found = find_books(&root, Some(&root.join("out"))).unwrap();
-        let rel: Vec<String> = found.iter().map(|p| p.strip_prefix(&root).unwrap().display().to_string()).collect();
+        // Windows の区切り (\) も / にそろえて比べる
+        let rel: Vec<String> = found
+            .iter()
+            .map(|p| p.strip_prefix(&root).unwrap().display().to_string().replace('\\', "/"))
+            .collect();
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(rel, ["", "vol2", "vol2/extra", "vol10"]);
     }
