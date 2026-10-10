@@ -70,6 +70,8 @@ pub struct DewarpResult {
     pub num_envelope_curves: usize,
     #[serde(default)]
     pub num_edge_curves: usize,
+    #[serde(default)]
+    pub num_chain_curves: usize,
     pub max_displacement_px: f64,
     pub output_width: u32,
     pub output_height: u32,
@@ -92,6 +94,7 @@ struct Curve {
     disp_max: f64,
     is_envelope: bool,
     is_edge: bool,
+    is_chain: bool,
     cx: f64,
     /// 多項式からのずれ (行の実際の形)。等間隔 (detail_step) に並べた値。空なら多項式だけを使う
     detail: Vec<f64>,
@@ -185,8 +188,12 @@ pub fn dewarp(src: &RgbImage, options: &DewarpOptions) -> (RgbImage, DewarpResul
         curves.extend(env);
     }
 
+    let chains = detect_char_chains(&char_mask, char_height, line_pitch(&curves, char_height), options);
+    merge_chains(&mut curves, chains, char_height);
+    result.num_chain_curves = curves.iter().filter(|c| c.is_chain).count();
+
     if options.use_edges {
-        let edges = detect_edge_curves(&small, char_height, options);
+        let edges = detect_edge_curves(&edge_source(src, small.dimensions()), char_height, options);
         result.num_edge_curves = edges.len();
         curves.extend(edges);
     }
@@ -446,20 +453,22 @@ fn add_detail(c: &mut Curve, xs: &[f64], ys: &[f64], char_height: f64) {
         return;
     }
     let res: Vec<f64> = xs.iter().zip(ys).map(|(&x, &y)| y - poly_eval(&c.poly, c.u(x))).collect();
-    let half = ((char_height * 2.0).round() as usize).max(2);
+    // 窓は x の距離で決める (文字ごとの点のようにまばらでも同じ幅になるように)
+    let half = char_height * 2.0;
     let step = (char_height / 2.0).max(1.0);
     let (x0, x1) = (xs[0], xs[xs.len() - 1]);
     let n = ((x1 - x0) / step).floor() as usize + 1;
     let mut detail: Vec<f64> = Vec::with_capacity(n);
-    let mut k = 0;
+    let (mut lo, mut hi) = (0, 0);
     let mut window: Vec<f64> = Vec::new();
     for i in 0..n {
         let x = x0 + i as f64 * step;
-        while k < xs.len() && xs[k] < x {
-            k += 1;
+        while lo < xs.len() && xs[lo] < x - half {
+            lo += 1;
         }
-        let lo = k.saturating_sub(half);
-        let hi = (k + half).min(xs.len());
+        while hi < xs.len() && xs[hi] <= x + half {
+            hi += 1;
+        }
         window.clear();
         window.extend(res[lo..hi].iter().filter(|r| r.abs() < char_height));
         if window.is_empty() {
@@ -477,6 +486,82 @@ fn add_detail(c: &mut Curve, xs: &[f64], ys: &[f64], char_height: f64) {
     c.detail_x0 = x0;
     c.detail_step = step;
     fit_target_line(c);
+}
+
+/// 同じ高さに並ぶ文字を、少し間が空いていても左から右へつないで「行」にする。
+/// 途中で段になってずれた行 (横につながった塊としては 2 つに分かれてしまう) も、1 本の行として扱えるようにする。
+fn detect_char_chains(char_mask: &GrayImage, char_height: f64, line_pitch: Option<f64>, options: &DewarpOptions) -> Vec<Curve> {
+    let w = char_mask.width() as usize;
+    // 1 文字が上下の部品 (へん・つくり・濁点など) に分かれていると並びが乱れるので、縦に少し閉じて 1 つにする
+    let r = ((char_height * 0.25).round() as u32).max(1);
+    let merged = erode_vertical(&dilate_vertical(char_mask, r), r);
+    let (_, stats) = imgutil::components_with_stats(&merged);
+    // ルビや点などの小さなものと、図の一部などの大きなものは除く
+    let mut chars: Vec<(f64, f64)> = stats
+        .iter()
+        .skip(1)
+        .filter(|st| {
+            let (cw, ch) = (st.width as f64, st.height as f64);
+            st.area > 0 && ch >= char_height * 0.5 && ch <= char_height * 1.6 && cw <= char_height * 2.0
+        })
+        .map(|st| (st.left as f64 + st.width as f64 / 2.0, st.top as f64 + st.height as f64 / 2.0))
+        .collect();
+    chars.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let n = chars.len();
+    let max_dx = char_height * 8.0;
+    // 縦のずれは、行の間隔の半分未満なら同じ行とみなす (隣の行とつながないように)
+    let max_dy = line_pitch.map_or(char_height * 0.8, |p| (p * 0.45).clamp(char_height * 0.5, char_height * 1.2));
+
+    // つなぐ候補 (左の文字, 右の文字, 費用) を費用の小さい順に、1 対 1 で採用する
+    let mut links: Vec<(usize, usize, f64)> = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            let dx = chars[j].0 - chars[i].0;
+            if dx > max_dx {
+                break;
+            }
+            let dy = (chars[j].1 - chars[i].1).abs();
+            if dx > char_height * 0.3 && dy <= max_dy {
+                links.push((i, j, dx + 4.0 * dy));
+            }
+        }
+    }
+    links.sort_by(|a, b| a.2.total_cmp(&b.2));
+    let mut next = vec![usize::MAX; n];
+    let mut has_prev = vec![false; n];
+    for &(i, j, _) in &links {
+        if next[i] == usize::MAX && !has_prev[j] {
+            next[i] = j;
+            has_prev[j] = true;
+        }
+    }
+
+    let cx = w as f64 / 2.0;
+    let mut curves = Vec::new();
+    for start in (0..n).filter(|&i| !has_prev[i]) {
+        let (mut xs, mut ys) = (Vec::new(), Vec::new());
+        let mut i = start;
+        loop {
+            xs.push(chars[i].0);
+            ys.push(chars[i].1);
+            if next[i] == usize::MAX {
+                break;
+            }
+            i = next[i];
+        }
+        if xs.len() < 9 || xs[xs.len() - 1] - xs[0] < options.min_line_width_ratio * w as f64 {
+            continue;
+        }
+        let span = (xs[xs.len() - 1] - xs[0]) / w as f64;
+        let degree = if span < 0.35 { 2 } else { options.poly_degree };
+        // 段差のある行は多項式から外れるので、許す誤差を広めにする (段差は add_detail で表す)
+        if let Some(mut c) = fit_curve(&xs, &ys, degree, cx, char_height * 0.6, false, 0.0, 0.0) {
+            add_detail(&mut c, &xs, &ys, char_height);
+            c.is_chain = true;
+            curves.push(c);
+        }
+    }
+    curves
 }
 
 /// 枠・写真・色の帯の縁など、長くてまっすぐなはずの横の境目 (明るさが段になって変わるところ) を探す。
@@ -567,6 +652,82 @@ fn detect_edge_curves(gray: &GrayImage, char_height: f64, options: &DewarpOption
         }
     }
     curves
+}
+
+/// 境目を探すための画像。画素ごとに R・G・B の最小値をとる (淡い色の帯や地図の枠も、白い紙との境目として見えるように)。
+fn edge_source(src: &RgbImage, (w, h): (u32, u32)) -> GrayImage {
+    let min_rgb = GrayImage::from_fn(src.width(), src.height(), |x, y| {
+        let p = src.get_pixel(x, y);
+        image::Luma([p[0].min(p[1]).min(p[2])])
+    });
+    image::imageops::resize(&min_rgb, w, h, image::imageops::FilterType::Triangle)
+}
+
+/// 文字の並び (chains) を、文字の塊からとった行 (curves) と合わせる。同じ行を両方がたどっているとき:
+/// 塊の行が並びのほぼ全体を覆っていれば、位置が正確な塊の行を残す。
+/// 並びの方が長い (段差で塊が途切れた行) なら、並びを残して、その中に収まる塊の行を捨てる。
+fn merge_chains(curves: &mut Vec<Curve>, chains: Vec<Curve>, char_height: f64) {
+    let same_row = |a: &Curve, b: &Curve| {
+        let lo = a.x_min.max(b.x_min);
+        let hi = a.x_max.min(b.x_max);
+        hi > lo && (a.y((lo + hi) / 2.0) - b.y((lo + hi) / 2.0)).abs() < char_height * 0.6
+    };
+    for chain in chains {
+        let len = chain.x_max - chain.x_min;
+        let rows: Vec<usize> = (0..curves.len())
+            .filter(|&i| !curves[i].is_edge && !curves[i].is_envelope && same_row(&curves[i], &chain))
+            .collect();
+        if rows
+            .iter()
+            .any(|&i| curves[i].x_max.min(chain.x_max) - curves[i].x_min.max(chain.x_min) >= len * 0.9)
+        {
+            continue;
+        }
+        // 並びの範囲に収まる (短い) 行を捨てて、並びを使う
+        let mut k = 0;
+        curves.retain(|c| {
+            let drop = rows.contains(&k) && c.x_min >= chain.x_min - char_height && c.x_max <= chain.x_max + char_height;
+            k += 1;
+            !drop
+        });
+        curves.push(chain);
+    }
+}
+
+/// 文字の行の間隔 (行の中央での位置の差の中央値)。行が少なければ None。
+fn line_pitch(curves: &[Curve], char_height: f64) -> Option<f64> {
+    let mut rows: Vec<(f64, f64, f64)> = curves
+        .iter()
+        .filter(|c| !c.is_envelope && !c.is_edge)
+        .map(|c| {
+            let mid = (c.x_min + c.x_max) / 2.0;
+            (c.target(mid), c.x_min, c.x_max)
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut gaps = Vec::new();
+    for (i, a) in rows.iter().enumerate() {
+        // 横に重なる、すぐ下の行との差
+        if let Some(b) = rows[i + 1..].iter().find(|b| b.1 < a.2 && a.1 < b.2 && b.0 - a.0 > char_height * 0.8) {
+            gaps.push(b.0 - a.0);
+        }
+    }
+    if gaps.len() < 3 {
+        return None;
+    }
+    gaps.sort_by(|a, b| a.total_cmp(b));
+    Some(gaps[gaps.len() / 2])
+}
+
+/// 縦方向に r 画素ずつ細らせる (上下 r 画素がすべて 255 のところだけ残す)。
+fn erode_vertical(mask: &GrayImage, r: u32) -> GrayImage {
+    let (w, h) = mask.dimensions();
+    GrayImage::from_fn(w, h, |x, y| {
+        let lo = y.saturating_sub(r);
+        let hi = (y + r).min(h - 1);
+        let all = (lo..=hi).all(|yy| mask.get_pixel(x, yy)[0] > 0);
+        image::Luma([if all { 255 } else { 0 }])
+    })
 }
 
 /// 縦方向に r 画素ずつ太らせる。
@@ -683,6 +844,7 @@ fn fit_curve(xs: &[f64], ys: &[f64], degree: usize, cx: f64, max_rms: f64, robus
         disp_max: 0.0,
         is_envelope: false,
         is_edge: false,
+        is_chain: false,
         detail: Vec::new(),
         detail_x0: 0.0,
         detail_step: 1.0,
@@ -798,16 +960,21 @@ pub fn debug_image(src: &RgbImage, options: &DewarpOptions) -> RgbImage {
     if curves.len() < options.min_lines {
         curves.extend(detect_envelope_curves(&mask, ch, options));
     }
+    let pitch = line_pitch(&curves, ch);
+    let chains = detect_char_chains(&mask, ch, pitch, options);
+    merge_chains(&mut curves, chains, ch);
     if options.use_edges {
-        curves.extend(detect_edge_curves(&small, ch, options));
+        curves.extend(detect_edge_curves(&edge_source(src, small.dimensions()), ch, options));
     }
     let (w, h) = out.dimensions();
     for c in &curves {
-        // 文字の行 = 赤、包絡線 = 紫、横の境目 = 青
+        // 文字の行 = 赤、包絡線 = 紫、横の境目 = 青、文字の並び = 橙
         let color = if c.is_envelope {
             Rgb([255, 0, 255])
         } else if c.is_edge {
             Rgb([0, 90, 255])
+        } else if c.is_chain {
+            Rgb([255, 140, 0])
         } else {
             Rgb([255, 0, 0])
         };
@@ -939,5 +1106,27 @@ mod tests {
     fn thin_line_is_ignored() {
         let img = GrayImage::from_fn(1000, 400, |_, y| image::Luma([if (199..201).contains(&y) { 60 } else { 250 }]));
         assert!(detect_edge_curves(&img, 20.0, &DewarpOptions::default()).is_empty());
+    }
+
+    // 途中で段になってずれた行も、文字の並びとして 1 本につながる
+    #[test]
+    fn stepped_row_becomes_one_chain() {
+        let mut mask = GrayImage::new(1000, 200);
+        for k in 0..44 {
+            let x0 = 20 + k * 22;
+            let cy = if x0 < 500 { 100 } else { 88 };
+            for y in cy - 8..cy + 8 {
+                for x in x0..x0 + 14 {
+                    mask.put_pixel(x, y, image::Luma([255]));
+                }
+            }
+        }
+        let chains = detect_char_chains(&mask, 16.0, None, &DewarpOptions::default());
+        assert_eq!(chains.len(), 1);
+        let c = &chains[0];
+        assert!(c.x_min < 40.0 && c.x_max > 950.0);
+        // 段差の両側の高さを表している
+        assert!((c.y(200.0) - 100.0).abs() < 3.0, "{}", c.y(200.0));
+        assert!((c.y(800.0) - 88.0).abs() < 3.0, "{}", c.y(800.0));
     }
 }
