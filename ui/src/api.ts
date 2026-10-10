@@ -16,6 +16,8 @@ async function call<T>(cmd: string, args: Record<string, unknown> = {}): Promise
 export type Settings = {
   rotate: 0 | 90 | 180 | 270;
   unwarp: boolean;
+  /// 平面化で紙の反りも直す (false なら台形だけ。影で文字が曲がるとき用)
+  unwarpCurl: boolean;
   split: boolean;
   deskew: boolean;
   dewarp: boolean;
@@ -31,6 +33,7 @@ export type Settings = {
 export const defaultSettings: Settings = {
   rotate: 0,
   unwarp: true,
+  unwarpCurl: true,
   split: true,
   deskew: true,
   dewarp: true,
@@ -52,6 +55,7 @@ export type PageOverride = {
   skip?: boolean;
   rotate?: 0 | 90 | 180 | 270 | null;
   unwarp?: boolean | null;
+  unwarpCurl?: boolean | null;
   dewarp?: boolean | null;
   split?: SplitOverride | null;
   content?: Record<string, RectF>;
@@ -95,6 +99,7 @@ export const cleanOverride = (o: PageOverride): PageOverride => {
   if (o.skip) r.skip = true;
   if (o.rotate != null) r.rotate = o.rotate;
   if (o.unwarp != null) r.unwarp = o.unwarp;
+  if (o.unwarpCurl != null) r.unwarpCurl = o.unwarpCurl;
   if (o.dewarp != null) r.dewarp = o.dewarp;
   if (o.split != null) r.split = o.split;
   if (o.content && Object.keys(o.content).length > 0) r.content = o.content;

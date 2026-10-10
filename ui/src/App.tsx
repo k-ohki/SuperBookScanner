@@ -238,6 +238,12 @@ export default function App() {
             </select>
           </label>
           <Check label="写真の紙を平らにする (台形・反り・背景)" value={settings.unwarp} onChange={(v) => set("unwarp", v)} />
+          {settings.unwarp && (
+            <div className="sub">
+              <Check label="紙の反りも直す" value={settings.unwarpCurl} onChange={(v) => set("unwarpCurl", v)} />
+              {!settings.unwarpCurl && <p className="hint">紙の範囲と台形だけを直します。影のところで文字が曲がるときに使います。</p>}
+            </div>
+          )}
           <Check label="見開きを左右に分ける" value={settings.split} onChange={(v) => set("split", v)} />
 
           <h3>補正</h3>
@@ -279,6 +285,7 @@ export default function App() {
                 </select>
               </label>
               <Tri label="平らにする" value={ovr.unwarp} onChange={(v) => setOvr({ unwarp: v })} />
+              <Tri label="紙の反りも直す" value={ovr.unwarpCurl} onChange={(v) => setOvr({ unwarpCurl: v })} />
               <Tri label="歪み補正" value={ovr.dewarp} onChange={(v) => setOvr({ dewarp: v })} />
               <label className="row">
                 見開き
@@ -293,7 +300,7 @@ export default function App() {
               </label>
               <Check label="この画像を書き出さない" value={!!ovr.skip} onChange={(v) => setOvr({ skip: v })} />
               {api.isOverridden(ovr) && (
-                <button className="link" onClick={() => setOvr({ skip: false, rotate: null, unwarp: null, dewarp: null, split: null, content: {} })}>
+                <button className="link" onClick={() => setOvr({ skip: false, rotate: null, unwarp: null, unwarpCurl: null, dewarp: null, split: null, content: {} })}>
                   調整を元に戻す
                 </button>
               )}

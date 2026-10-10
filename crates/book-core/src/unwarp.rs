@@ -4,6 +4,10 @@
 //! モデルは 488x712 に縮めた画像から、出力画像の各点が元画像のどこに当たるかを 45x31 の格子で返す。
 //! その格子を元の解像度で補間して、元画像から画素を拾い直す (UVDoc の bilinear_unwarping と同じ)。
 //! 推論は tract (Rust だけで動く ONNX ランタイム) で CPU 上で行う。
+//!
+//! モデルはページの影を折り目や反りと見誤り、文字を曲げてしまうことがある。そのときのために、
+//! 「紙の反りは直さない」(`curl = false`) では、格子の外周 (紙の輪郭) に最もよく合う射影変換 (台形補正) だけを使い、
+//! 格子の内側の曲がりは捨てる。ノドの湾曲は、文字の行をたどる歪み補正 (dewarp) に任せる。
 
 use crate::input;
 use anyhow::{anyhow, Context, Result};
@@ -18,10 +22,19 @@ pub const MODEL_FILE: &str = "uvdoc.onnx";
 const INPUT_W: usize = 488;
 const INPUT_H: usize = 712;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UnwarpOptions {
     /// モデルファイル。None なら find_model() で探す
     pub model: Option<PathBuf>,
+    /// 紙の反り (曲面) も直す。false なら紙の範囲と台形 (遠近) だけを直す
+    pub curl: bool,
+}
+
+impl Default for UnwarpOptions {
+    fn default() -> Self {
+        Self { model: None, curl: true }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -108,7 +121,7 @@ pub fn unwarp(img: &RgbImage, options: &UnwarpOptions) -> (RgbImage, UnwarpResul
     };
     match predict_grid(img, &model) {
         Ok((grid, gh, gw)) => (
-            remap(img, &grid, gh, gw),
+            remap(img, &if options.curl { grid } else { flatten_grid(&grid, gh, gw) }, gh, gw),
             UnwarpResult {
                 applied: true,
                 message: String::new(),
@@ -122,6 +135,82 @@ pub fn unwarp(img: &RgbImage, options: &UnwarpOptions) -> (RgbImage, UnwarpResul
             },
         ),
     }
+}
+
+/// 格子を、その外周の点に最もよく合う射影変換 (ホモグラフィ) で作り直す。
+/// 紙の範囲と台形 (遠近) は残し、内側の曲がり (反り・影による誤認識) をなくす。
+fn flatten_grid(grid: &[f32], gh: usize, gw: usize) -> Vec<f32> {
+    let plane = gh * gw;
+    let st = |i: usize, j: usize| (i as f64 / (gw - 1) as f64, j as f64 / (gh - 1) as f64);
+    let uv = |i: usize, j: usize| (grid[j * gw + i] as f64, grid[plane + j * gw + i] as f64);
+    // 外周の格子点 (出力の正規化座標 s, t → 元画像の座標 u, v)
+    let mut pts = Vec::new();
+    for i in 0..gw {
+        for j in [0, gh - 1] {
+            pts.push((st(i, j), uv(i, j)));
+        }
+    }
+    for j in 1..gh - 1 {
+        for i in [0, gw - 1] {
+            pts.push((st(i, j), uv(i, j)));
+        }
+    }
+    let Some(h) = fit_homography(&pts) else {
+        return grid.to_vec();
+    };
+    let mut out = vec![0f32; 2 * plane];
+    for j in 0..gh {
+        for i in 0..gw {
+            let (s, t) = st(i, j);
+            let d = h[6] * s + h[7] * t + 1.0;
+            out[j * gw + i] = ((h[0] * s + h[1] * t + h[2]) / d) as f32;
+            out[plane + j * gw + i] = ((h[3] * s + h[4] * t + h[5]) / d) as f32;
+        }
+    }
+    out
+}
+
+/// (s, t) → (u, v) の射影変換を最小二乗で求める (h33 = 1 とした 8 個の係数)。
+fn fit_homography(pts: &[((f64, f64), (f64, f64))]) -> Option<[f64; 8]> {
+    // 正規方程式 A^T A h = A^T b
+    let mut ata = [[0f64; 8]; 8];
+    let mut atb = [0f64; 8];
+    for &((s, t), (u, v)) in pts {
+        for (row, rhs) in [([s, t, 1.0, 0.0, 0.0, 0.0, -u * s, -u * t], u), ([0.0, 0.0, 0.0, s, t, 1.0, -v * s, -v * t], v)] {
+            for a in 0..8 {
+                atb[a] += row[a] * rhs;
+                for b in 0..8 {
+                    ata[a][b] += row[a] * row[b];
+                }
+            }
+        }
+    }
+    solve8(ata, atb)
+}
+
+/// 8 元連立一次方程式をガウスの消去法 (部分ピボット) で解く。
+fn solve8(mut m: [[f64; 8]; 8], mut b: [f64; 8]) -> Option<[f64; 8]> {
+    for col in 0..8 {
+        let pivot = (col..8).max_by(|&x, &y| m[x][col].abs().total_cmp(&m[y][col].abs()))?;
+        if m[pivot][col].abs() < 1e-12 {
+            return None;
+        }
+        m.swap(col, pivot);
+        b.swap(col, pivot);
+        for r in col + 1..8 {
+            let f = m[r][col] / m[col][col];
+            for c in col..8 {
+                m[r][c] -= f * m[col][c];
+            }
+            b[r] -= f * b[col];
+        }
+    }
+    let mut x = [0f64; 8];
+    for r in (0..8).rev() {
+        let sum: f64 = (r + 1..8).map(|c| m[r][c] * x[c]).sum();
+        x[r] = (b[r] - sum) / m[r][r];
+    }
+    Some(x)
 }
 
 /// 格子を出力の大きさまで双線形で広げ、元画像から双線形で画素を拾う (align_corners = true)。
@@ -165,6 +254,46 @@ pub fn unwarp_file(src: &Path, dst: &Path, rotate: u16, options: &UnwarpOptions)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn grid_from(gh: usize, gw: usize, f: impl Fn(f64, f64) -> (f64, f64)) -> Vec<f32> {
+        let mut grid = vec![0f32; 2 * gh * gw];
+        for j in 0..gh {
+            for i in 0..gw {
+                let (u, v) = f(i as f64 / (gw - 1) as f64, j as f64 / (gh - 1) as f64);
+                grid[j * gw + i] = u as f32;
+                grid[gh * gw + j * gw + i] = v as f32;
+            }
+        }
+        grid
+    }
+
+    // 射影変換だけの格子は、平らにしてもほぼ変わらない
+    #[test]
+    fn flatten_keeps_perspective() {
+        let persp = |s: f64, t: f64| {
+            let d = 0.3 * s + 0.1 * t + 1.0;
+            ((1.6 * s - 0.2 * t - 0.8) / d, (0.1 * s + 1.5 * t - 0.9) / d)
+        };
+        let grid = grid_from(45, 31, persp);
+        let flat = flatten_grid(&grid, 45, 31);
+        let err = grid.iter().zip(&flat).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(err < 1e-4, "max error {err}");
+    }
+
+    // 内側だけが曲がった格子 (影を折り目と見誤った場合) は、まっすぐに戻る
+    #[test]
+    fn flatten_removes_inner_bend() {
+        let straight = |s: f64, t: f64| (s * 1.8 - 0.9, t * 1.8 - 0.9);
+        let bent = |s: f64, t: f64| {
+            let (u, v) = straight(s, t);
+            // 外周では 0、内側で最大になる曲がり
+            (u, v + 0.08 * (std::f64::consts::PI * s).sin() * (std::f64::consts::PI * t).sin())
+        };
+        let flat = flatten_grid(&grid_from(45, 31, bent), 45, 31);
+        let want = grid_from(45, 31, straight);
+        let err = want.iter().zip(&flat).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(err < 1e-4, "max error {err}");
+    }
 
     // 恒等の格子なら画像はそのまま
     #[test]

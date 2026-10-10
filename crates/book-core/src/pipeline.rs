@@ -138,7 +138,13 @@ pub fn process_image_with(file: &Path, options: &ConvertOptions, ovr: &PageOverr
         Some(false) => None,
         Some(true) => Some(options.unwarp.clone().unwrap_or_default()),
         None => options.unwarp.clone(),
-    };
+    }
+    .map(|mut o| {
+        if let Some(curl) = ovr.unwarp_curl {
+            o.curl = curl;
+        }
+        o
+    });
     let unwarp_result = unwarp_options.map(|o| {
         let (out, r) = unwarp::unwarp(&img, &o);
         img = out;

@@ -149,6 +149,11 @@ button.primary {
   padding-left: 22px;
 }
 
+/* 上の項目に付属する設定 (字下げ) */
+div.sub {
+  padding-left: 22px;
+}
+
 .row.disabled {
   color: var(--muted);
 }

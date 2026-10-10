@@ -16,6 +16,9 @@ use std::sync::atomic::AtomicBool;
 pub struct Settings {
     pub rotate: u16,
     pub unwarp: bool,
+    /// 平面化で紙の反りも直す (false なら台形だけ)
+    #[serde(default = "yes")]
+    pub unwarp_curl: bool,
     pub split: bool,
     pub deskew: bool,
     pub dewarp: bool,
@@ -33,7 +36,10 @@ impl Settings {
         let d = ConvertOptions::default();
         ConvertOptions {
             rotate: self.rotate,
-            unwarp: self.unwarp.then(|| d.unwarp.clone().unwrap_or_default()),
+            unwarp: self.unwarp.then(|| book_core::unwarp::UnwarpOptions {
+                curl: self.unwarp_curl,
+                ..d.unwarp.clone().unwrap_or_default()
+            }),
             split: self.split.then(|| d.split.clone().unwrap_or_default()),
             deskew: self.deskew.then(|| d.deskew.clone().unwrap_or_default()),
             dewarp: self.dewarp.then(|| d.dewarp.clone().unwrap_or_default()),
@@ -54,6 +60,10 @@ impl Settings {
             ..d
         }
     }
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Serialize)]
