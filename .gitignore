@@ -12,6 +12,9 @@ node_modules/
 # 動作確認用の画像 (本の写真) はコミットしない
 /book_data/
 
+# Windows で書き出した PDF の既定の保存先
+/PDF/
+
 # エディタ
 .vscode/
 .idea/

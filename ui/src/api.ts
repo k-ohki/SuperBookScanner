@@ -114,6 +114,30 @@ export const cancelConvert = () => call<void>("cancel_convert");
 
 export const sharpenAvailable = () => call<string | null>("sharpen_available");
 
+export const ensureDir = (path: string) => call<void>("ensure_dir", { path });
+
+// ---- アプリだけ: PDF の保存先 (この PC に覚えておく) ----------------------
+
+/// Windows の既定の保存先。空文字なら本のフォルダと同じ場所 (Mac の既定)
+const defaultOutputDir = navigator.userAgent.includes("Windows") ? "D:\\MyProgram\\SuperBookScanner\\PDF" : "";
+const outputDirKey = "outputDir";
+
+export const loadOutputDir = (): string => {
+  try {
+    return localStorage.getItem(outputDirKey) ?? defaultOutputDir;
+  } catch {
+    return defaultOutputDir;
+  }
+};
+
+export const saveOutputDir = (dir: string) => {
+  try {
+    localStorage.setItem(outputDirKey, dir);
+  } catch {
+    /* 覚えられなくても、今回の起動中は使える */
+  }
+};
+
 /// 書き出しの進捗を受け取る。戻り値は受け取りをやめる関数
 export const onProgress = async (cb: (p: Progress) => void): Promise<() => void> => {
   if (!isRemote) return listen<Progress>("convert-progress", (e) => cb(e.payload));

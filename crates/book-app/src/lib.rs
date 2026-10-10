@@ -79,6 +79,12 @@ fn sharpen_available() -> Option<String> {
     ops::sharpen_available()
 }
 
+/// フォルダがなければ作る (PDF の保存先)。
+#[tauri::command]
+fn ensure_dir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| format!("{path}: {e}"))
+}
+
 /// iPad などから使えるようにする (同じネットワーク内に Web サーバーを立てる)。
 #[tauri::command]
 async fn remote_start(app: AppHandle, state: State<'_, AppState>) -> Result<remote::RemoteInfo, String> {
@@ -122,6 +128,7 @@ pub fn run(context: tauri::Context) {
             convert,
             cancel_convert,
             sharpen_available,
+            ensure_dir,
             initial_folder,
             remote_start,
             remote_stop,
